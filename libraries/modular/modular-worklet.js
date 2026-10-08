@@ -55,20 +55,20 @@ function polyBlep(t, dt) {
 // VCO (after the A-110 "Standard VCO")
 
 class VCOProcessor extends AudioWorkletProcessor {
-    // inputs:  0 cv1 (1 V/oct)  1 cv2  2 pw cv  3 sync
+    // inputs:  0 pitch (1 V/oct)  1 pitch 2  2 width  3 sync
     // outputs: 0 saw  1 square  2 triangle  3 sine
 
     static get parameterDescriptors() {
         return [
-            {name: 'range', defaultValue: 0, minValue: -4, maxValue: 4,
+            {name: 'octave', defaultValue: 0, minValue: -4, maxValue: 4,
                 automationRate: 'k-rate'},        // octaves
-            {name: 'tune', defaultValue: 0, minValue: -12, maxValue: 12,
+            {name: 'semitones', defaultValue: 0, minValue: -12, maxValue: 12,
                 automationRate: 'k-rate'},        // semitones
             {name: 'pulse width', defaultValue: 0.5, minValue: 0,
                 maxValue: 1, automationRate: 'k-rate'},
-            {name: 'cv2 level', defaultValue: 0, minValue: 0, maxValue: 1,
+            {name: 'pitch 2 level', defaultValue: 0, minValue: 0, maxValue: 1,
                 automationRate: 'k-rate'},
-            {name: 'pw cv level', defaultValue: 0, minValue: 0,
+            {name: 'width level', defaultValue: 0, minValue: 0,
                 maxValue: 1, automationRate: 'k-rate'}
         ];
     }
@@ -90,11 +90,11 @@ class VCOProcessor extends AudioWorkletProcessor {
             tri = outputs[2][0],
             sin = outputs[3][0],
             n = saw.length,
-            range = param(parameters, 'range', 0),
-            tune = param(parameters, 'tune', 0),
+            range = param(parameters, 'octave', 0),
+            tune = param(parameters, 'semitones', 0),
             pwKnob = param(parameters, 'pulse width', 0),
-            cv2Level = param(parameters, 'cv2 level', 0),
-            pwLevel = param(parameters, 'pw cv level', 0),
+            cv2Level = param(parameters, 'pitch 2 level', 0),
+            pwLevel = param(parameters, 'width level', 0),
             baseVolts = range + tune / 12,
             maxFreq = sampleRate * 0.45,
             i, volts, freq, dt, pw, t, s, p, sy;
@@ -151,20 +151,20 @@ class VCOProcessor extends AudioWorkletProcessor {
 // VCF (after the A-120 "24 dB Low Pass" ladder filter)
 
 class VCFProcessor extends AudioWorkletProcessor {
-    // inputs:  0 audio  1 cv1 (1 V/oct)  2 cv2  3 cv3
+    // inputs:  0 audio  1 cutoff (1 V/oct)  2 cutoff 2  3 cutoff 3
     // outputs: 0 lowpass
 
     static get parameterDescriptors() {
         return [
-            {name: 'frequency', defaultValue: 1000, minValue: 10,
+            {name: 'cutoff', defaultValue: 1000, minValue: 10,
                 maxValue: 20000, automationRate: 'k-rate'}, // Hz
             {name: 'resonance', defaultValue: 0, minValue: 0, maxValue: 1,
                 automationRate: 'k-rate'},
             {name: 'audio level', defaultValue: 1, minValue: 0,
                 maxValue: 1, automationRate: 'k-rate'},
-            {name: 'cv2 level', defaultValue: 0, minValue: 0, maxValue: 1,
+            {name: 'cutoff 2 level', defaultValue: 0, minValue: 0, maxValue: 1,
                 automationRate: 'k-rate'},
-            {name: 'cv3 level', defaultValue: 0, minValue: 0, maxValue: 1,
+            {name: 'cutoff 3 level', defaultValue: 0, minValue: 0, maxValue: 1,
                 automationRate: 'k-rate'}
         ];
     }
@@ -184,11 +184,11 @@ class VCFProcessor extends AudioWorkletProcessor {
             cv3 = channel(inputs, 3),
             out = outputs[0][0],
             n = out.length,
-            fKnob = param(parameters, 'frequency', 0),
+            fKnob = param(parameters, 'cutoff', 0),
             res = param(parameters, 'resonance', 0),
             level = param(parameters, 'audio level', 0),
-            cv2Level = param(parameters, 'cv2 level', 0),
-            cv3Level = param(parameters, 'cv3 level', 0),
+            cv2Level = param(parameters, 'cutoff 2 level', 0),
+            cv3Level = param(parameters, 'cutoff 3 level', 0),
             k = res * 5, // feedback; above 4 the filter self-oscillates
             maxFc = Math.min(20000, sampleRate * 0.45),
             i, volts, fc, g, G, S, u, x, v,
@@ -226,18 +226,18 @@ class VCFProcessor extends AudioWorkletProcessor {
 // VCA (after the A-130 "Linear VCA")
 
 class VCAProcessor extends AudioWorkletProcessor {
-    // inputs:  0 audio 1  1 audio 2  2 cv1  3 cv2
+    // inputs:  0 audio 1  1 audio 2  2 loudness  3 loudness 2
     // outputs: 0 out
 
     static get parameterDescriptors() {
         return [
-            {name: 'gain', defaultValue: 0, minValue: 0, maxValue: 1,
+            {name: 'loudness', defaultValue: 0, minValue: 0, maxValue: 1,
                 automationRate: 'k-rate'},
             {name: 'audio 1 level', defaultValue: 1, minValue: 0,
                 maxValue: 1, automationRate: 'k-rate'},
             {name: 'audio 2 level', defaultValue: 1, minValue: 0,
                 maxValue: 1, automationRate: 'k-rate'},
-            {name: 'cv2 level', defaultValue: 0, minValue: 0, maxValue: 1,
+            {name: 'loudness 2 level', defaultValue: 0, minValue: 0, maxValue: 1,
                 automationRate: 'k-rate'}
         ];
     }
@@ -249,10 +249,10 @@ class VCAProcessor extends AudioWorkletProcessor {
             cv2 = channel(inputs, 3),
             out = outputs[0][0],
             n = out.length,
-            gain = param(parameters, 'gain', 0),
+            gain = param(parameters, 'loudness', 0),
             l1 = param(parameters, 'audio 1 level', 0),
             l2 = param(parameters, 'audio 2 level', 0),
-            cv2Level = param(parameters, 'cv2 level', 0),
+            cv2Level = param(parameters, 'loudness 2 level', 0),
             i, a, x;
 
         for (i = 0; i < n; i += 1) {

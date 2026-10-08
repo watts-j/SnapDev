@@ -40,24 +40,24 @@
         types: {
             VCO: {
                 processor: 'a100-vco',
-                inputs: ['cv1', 'cv2', 'pw cv', 'sync'],
+                inputs: ['pitch', 'pitch 2', 'width', 'sync'],
                 outputs: ['saw', 'square', 'triangle', 'sine'],
-                knobs: ['range', 'tune', 'pulse width', 'cv2 level',
-                    'pw cv level']
+                knobs: ['octave', 'semitones', 'pulse width',
+                    'pitch 2 level', 'width level']
             },
             VCF: {
                 processor: 'a100-vcf',
-                inputs: ['audio', 'cv1', 'cv2', 'cv3'],
+                inputs: ['audio', 'cutoff', 'cutoff 2', 'cutoff 3'],
                 outputs: ['lowpass'],
-                knobs: ['frequency', 'resonance', 'audio level',
-                    'cv2 level', 'cv3 level']
+                knobs: ['cutoff', 'resonance', 'audio level',
+                    'cutoff 2 level', 'cutoff 3 level']
             },
             VCA: {
                 processor: 'a100-vca',
-                inputs: ['audio 1', 'audio 2', 'cv1', 'cv2'],
+                inputs: ['audio 1', 'audio 2', 'loudness', 'loudness 2'],
                 outputs: ['out'],
-                knobs: ['gain', 'audio 1 level', 'audio 2 level',
-                    'cv2 level']
+                knobs: ['loudness', 'audio 1 level', 'audio 2 level',
+                    'loudness 2 level']
             },
             ADSR: {
                 processor: 'a100-adsr',
