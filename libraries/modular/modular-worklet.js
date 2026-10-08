@@ -10,7 +10,7 @@
       - sound signals swing between -1 and +1
       - pitch and cutoff control signals are in semitones
       - level control signals are a fraction of full, 0 to 1
-      - "key held" and "trigger" signals count as on above 0.5
+      - "gate" and "trigger" signals count as on above 0.5
 
     This file runs inside the audio rendering thread. It must not
     reference Snap! or the DOM.
@@ -227,7 +227,7 @@ class VolumeProcessor extends AudioWorkletProcessor {
 // envelope
 
 class EnvelopeProcessor extends AudioWorkletProcessor {
-    // inputs:  0 key held
+    // inputs:  0 gate
     // outputs: 0 output (0 .. amount)
 
     static get parameterDescriptors() {
@@ -242,7 +242,7 @@ class EnvelopeProcessor extends AudioWorkletProcessor {
                 maxValue: 20, automationRate: 'k-rate'},   // seconds
             {name: 'amount', defaultValue: 1, minValue: 0, maxValue: 100,
                 automationRate: 'k-rate'},                 // output peak
-            {name: 'key held', defaultValue: 0, minValue: 0, maxValue: 1,
+            {name: 'gate', defaultValue: 0, minValue: 0, maxValue: 1,
                 automationRate: 'k-rate'}                  // set by block
         ];
     }
@@ -255,7 +255,7 @@ class EnvelopeProcessor extends AudioWorkletProcessor {
     }
 
     process(inputs, outputs, parameters) {
-        var keyIn = channel(inputs, 0),
+        var gateIn = channel(inputs, 0),
             out = outputs[0][0],
             n = out.length,
             attack = param(parameters, 'attack', 0),
@@ -263,7 +263,7 @@ class EnvelopeProcessor extends AudioWorkletProcessor {
             sustain = param(parameters, 'sustain', 0),
             release = param(parameters, 'release', 0),
             amount = param(parameters, 'amount', 0),
-            manual = param(parameters, 'key held', 0) > ON,
+            manual = param(parameters, 'gate', 0) > ON,
             // per-sample coefficients; a stage settles in about its time
             aStep = 1 / (attack * sampleRate),
             dCoef = 1 - Math.exp(-4 / (decay * sampleRate)),
@@ -271,7 +271,7 @@ class EnvelopeProcessor extends AudioWorkletProcessor {
             i, held;
 
         for (i = 0; i < n; i += 1) {
-            held = manual || (keyIn ? keyIn[i] > ON : false);
+            held = manual || (gateIn ? gateIn[i] > ON : false);
 
             if (held && !this.wasHeld) {
                 this.stage = 'attack';

@@ -16,7 +16,7 @@
         syn_disconnect(module, input)
         syn_set(module, knob, value)
         syn_get(module, knob)
-        syn_key(module, bool)
+        syn_gate(module, bool)
         syn_modules()
 
     menus (prefix "syn_"):
@@ -59,7 +59,7 @@
             },
             envelope: {
                 processor: 'modular-envelope',
-                inputs: ['key held'],
+                inputs: ['gate'],
                 outputs: ['output'],
                 knobs: ['attack', 'decay', 'sustain', 'release', 'amount']
             },
@@ -314,14 +314,14 @@
         return Math.round(v * 1e6) / 1e6;
     };
 
-    Modular.key = function (name, held) {
+    Modular.gate = function (name, open) {
         var rec = this.module(name),
             p = rec.node.parameters ?
-                rec.node.parameters.get('key held') : null;
+                rec.node.parameters.get('gate') : null;
         if (!p) {
-            throw new Error('module "' + rec.name + '" has no key');
+            throw new Error('module "' + rec.name + '" has no gate');
         }
-        p.setValueAtTime(held ? 1 : 0, this.context().currentTime);
+        p.setValueAtTime(open ? 1 : 0, this.context().currentTime);
     };
 
     // primitives
@@ -378,9 +378,9 @@
     );
 
     SnapExtensions.primitives.set(
-        'syn_key(module, bool)',
-        function (name, held) {
-            Modular.key(name, held === true);
+        'syn_gate(module, bool)',
+        function (name, open) {
+            Modular.gate(name, open === true);
         }
     );
 
