@@ -2804,6 +2804,26 @@
     ]
   },
   {
+    "fileName": "modular.xml",
+    "name": "Modular Synth",
+    "description": "Patch together virtual Doepfer A-100 style synthesizer modules: VCO, VCF, VCA and ADSR",
+    "searchData": [
+      "create _ module named _",
+      "delete module _",
+      "delete all modules",
+      "connect _ _ to _ _",
+      "disconnect _ _",
+      "set _ _ to _",
+      "_ _",
+      "gate _ _",
+      "modules",
+      "note _ as volts"
+    ],
+    "categories": [
+      "Modular"
+    ]
+  },
+  {
     "fileName": "TuneScope.xml",
     "name": "TuneScope",
     "description": "Music Notation, Instruments, Drums, Tones, Chords, Tracks, from the University of Virginia (Glen Bull)",
