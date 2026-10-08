@@ -371,7 +371,58 @@ class ADSRProcessor extends AudioWorkletProcessor {
     }
 }
 
+// LFO (after the A-145 "Low Frequency Oscillator")
+
+class LFOProcessor extends AudioWorkletProcessor {
+    // inputs:  0 reset
+    // outputs: 0 sine  1 triangle  2 saw  3 square
+
+    static get parameterDescriptors() {
+        return [
+            {name: 'frequency', defaultValue: 2, minValue: 0.01,
+                maxValue: 500, automationRate: 'k-rate'} // Hz
+        ];
+    }
+
+    constructor() {
+        super();
+        this.phase = 0;
+        this.lastReset = 0;
+    }
+
+    process(inputs, outputs, parameters) {
+        var reset = channel(inputs, 0),
+            sin = outputs[0][0],
+            tri = outputs[1][0],
+            saw = outputs[2][0],
+            sqr = outputs[3][0],
+            n = sin.length,
+            dt = param(parameters, 'frequency', 0) / sampleRate,
+            i, t, r;
+
+        for (i = 0; i < n; i += 1) {
+            // restart the cycle on a rising edge at the reset input
+            if (reset) {
+                r = reset[i];
+                if (r > GATE_THRESHOLD && this.lastReset <= GATE_THRESHOLD) {
+                    this.phase = 0;
+                }
+                this.lastReset = r;
+            }
+            t = this.phase;
+            sin[i] = Math.sin(TWO_PI * t) * AUDIO_LEVEL;
+            tri[i] = (t < 0.5 ? 4 * t - 1 : 3 - 4 * t) * AUDIO_LEVEL;
+            saw[i] = (2 * t - 1) * AUDIO_LEVEL;
+            sqr[i] = (t < 0.5 ? 1 : -1) * AUDIO_LEVEL;
+            this.phase += dt;
+            if (this.phase >= 1) {this.phase -= 1; }
+        }
+        return true;
+    }
+}
+
 registerProcessor('a100-vco', VCOProcessor);
 registerProcessor('a100-vcf', VCFProcessor);
 registerProcessor('a100-vca', VCAProcessor);
 registerProcessor('a100-adsr', ADSRProcessor);
+registerProcessor('a100-lfo', LFOProcessor);

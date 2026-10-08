@@ -2806,7 +2806,7 @@
   {
     "fileName": "modular.xml",
     "name": "Modular Synth",
-    "description": "Patch together virtual Doepfer A-100 style synthesizer modules: VCO, VCF, VCA and ADSR",
+    "description": "Patch together virtual Doepfer A-100 style synthesizer modules: VCO, VCF, VCA, ADSR and LFO",
     "searchData": [
       "create _ module named _",
       "delete module _",

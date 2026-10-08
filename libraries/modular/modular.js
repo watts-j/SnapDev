@@ -64,6 +64,12 @@
                 inputs: ['gate', 'retrigger'],
                 outputs: ['envelope', 'inverted'],
                 knobs: ['attack', 'decay', 'sustain', 'release']
+            },
+            LFO: {
+                processor: 'a100-lfo',
+                inputs: ['reset'],
+                outputs: ['sine', 'triangle', 'saw', 'square'],
+                knobs: ['frequency']
             }
         }
     };
