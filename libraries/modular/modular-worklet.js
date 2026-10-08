@@ -1,17 +1,16 @@
 /*
     modular-worklet.js
 
-    AudioWorklet processors for the Snap! "Modular Synth" library,
-    modelled after modules of the Doepfer A-100 system.
+    AudioWorklet processors for the Snap! "Modular Synth" library.
 
-    Signal conventions (approximating the A-100):
-      - audio signals swing between -5 and +5 (volts)
-      - pitch control voltages follow 1 V per octave
-      - gates are "high" above 2.5 V
-      - the ADSR envelope rises to +8 V
+    Each processor is one module. Its jacks are the node's inputs and
+    outputs, its knobs are AudioParams.
 
-    Each processor is one module. Its patch jacks are the node's
-    inputs and outputs, its knobs are AudioParams.
+    Signal conventions:
+      - sound signals swing between -1 and +1
+      - pitch and cutoff control signals are in semitones
+      - level control signals are a fraction of full, 0 to 1
+      - "key held" and "trigger" signals count as on above 0.5
 
     This file runs inside the audio rendering thread. It must not
     reference Snap! or the DOM.
@@ -20,10 +19,8 @@
 /*global AudioWorkletProcessor, registerProcessor, sampleRate*/
 
 var TWO_PI = Math.PI * 2,
-    MIDDLE_C = 261.6255653005986, // 0 V on a VCO's pitch input
-    AUDIO_LEVEL = 5,
-    GATE_THRESHOLD = 2.5,
-    ENV_PEAK = 8;
+    MIDDLE_C = 261.6255653005986, // pitch 0 on an oscillator
+    ON = 0.5;
 
 // helpers
 
@@ -52,23 +49,19 @@ function polyBlep(t, dt) {
     return 0;
 }
 
-// VCO (after the A-110 "Standard VCO")
+// oscillator
 
-class VCOProcessor extends AudioWorkletProcessor {
-    // inputs:  0 pitch (1 V/oct)  1 pitch 2  2 width  3 sync
+class OscillatorProcessor extends AudioWorkletProcessor {
+    // inputs:  0 pitch (semitones)  1 trigger
     // outputs: 0 saw  1 square  2 triangle  3 sine
 
     static get parameterDescriptors() {
         return [
             {name: 'octave', defaultValue: 0, minValue: -4, maxValue: 4,
-                automationRate: 'k-rate'},        // octaves
-            {name: 'semitones', defaultValue: 0, minValue: -12, maxValue: 12,
+                automationRate: 'k-rate'},
+            {name: 'tune', defaultValue: 0, minValue: -48, maxValue: 48,
                 automationRate: 'k-rate'},        // semitones
             {name: 'pulse width', defaultValue: 0.5, minValue: 0,
-                maxValue: 1, automationRate: 'k-rate'},
-            {name: 'pitch 2 level', defaultValue: 0, minValue: 0, maxValue: 1,
-                automationRate: 'k-rate'},
-            {name: 'width level', defaultValue: 0, minValue: 0,
                 maxValue: 1, automationRate: 'k-rate'}
         ];
     }
@@ -76,70 +69,62 @@ class VCOProcessor extends AudioWorkletProcessor {
     constructor() {
         super();
         this.phase = 0;
-        this.lastSync = 0;
+        this.lastTrig = 0;
         this.tri = 0; // leaky integrator state for the triangle
     }
 
     process(inputs, outputs, parameters) {
-        var cv1 = channel(inputs, 0),
-            cv2 = channel(inputs, 1),
-            pwcv = channel(inputs, 2),
-            sync = channel(inputs, 3),
+        var pitch = channel(inputs, 0),
+            trig = channel(inputs, 1),
             saw = outputs[0][0],
             sqr = outputs[1][0],
             tri = outputs[2][0],
             sin = outputs[3][0],
             n = saw.length,
-            range = param(parameters, 'octave', 0),
-            tune = param(parameters, 'semitones', 0),
-            pwKnob = param(parameters, 'pulse width', 0),
-            cv2Level = param(parameters, 'pitch 2 level', 0),
-            pwLevel = param(parameters, 'width level', 0),
-            baseVolts = range + tune / 12,
+            base = param(parameters, 'octave', 0) * 12
+                + param(parameters, 'tune', 0),
+            pw = param(parameters, 'pulse width', 0),
             maxFreq = sampleRate * 0.45,
-            i, volts, freq, dt, pw, t, s, p, sy;
+            i, semis, freq, dt, t, s, p, tr;
+
+        if (pw < 0.05) {pw = 0.05; }
+        if (pw > 0.95) {pw = 0.95; }
 
         for (i = 0; i < n; i += 1) {
-            volts = baseVolts;
-            if (cv1) {volts += cv1[i]; }
-            if (cv2) {volts += cv2[i] * cv2Level; }
-            freq = MIDDLE_C * Math.pow(2, volts);
+            semis = base;
+            if (pitch) {semis += pitch[i]; }
+            freq = MIDDLE_C * Math.pow(2, semis / 12);
             if (freq > maxFreq) {freq = maxFreq; }
             if (freq < 0.01) {freq = 0.01; }
             dt = freq / sampleRate;
 
-            // hard sync: reset the phase on a rising edge
-            if (sync) {
-                sy = sync[i];
-                if (sy > 0 && this.lastSync <= 0) {
+            // trigger: restart the wave on a rising edge
+            if (trig) {
+                tr = trig[i];
+                if (tr > ON && this.lastTrig <= ON) {
                     this.phase = 0;
                 }
-                this.lastSync = sy;
+                this.lastTrig = tr;
             }
-
-            pw = pwKnob;
-            if (pwcv) {pw += pwcv[i] * pwLevel / AUDIO_LEVEL; }
-            if (pw < 0.05) {pw = 0.05; }
-            if (pw > 0.95) {pw = 0.95; }
 
             t = this.phase;
 
             // band-limited sawtooth
             s = 2 * t - 1 - polyBlep(t, dt);
-            saw[i] = s * AUDIO_LEVEL;
+            saw[i] = s;
 
             // band-limited pulse
             p = (t < pw ? 1 : -1) + polyBlep(t, dt)
                 - polyBlep((t + 1 - pw) % 1, dt);
-            sqr[i] = p * AUDIO_LEVEL;
+            sqr[i] = p;
 
             // triangle: leaky integral of the 50% pulse
             this.tri = this.tri * (1 - dt * 0.5)
                 + ((t < 0.5 ? 1 : -1) + polyBlep(t, dt)
                     - polyBlep((t + 0.5) % 1, dt)) * 4 * dt;
-            tri[i] = this.tri * AUDIO_LEVEL;
+            tri[i] = this.tri;
 
-            sin[i] = Math.sin(TWO_PI * t) * AUDIO_LEVEL;
+            sin[i] = Math.sin(TWO_PI * t);
 
             this.phase += dt;
             if (this.phase >= 1) {this.phase -= 1; }
@@ -148,23 +133,17 @@ class VCOProcessor extends AudioWorkletProcessor {
     }
 }
 
-// VCF (after the A-120 "24 dB Low Pass" ladder filter)
+// filter (24 dB low pass ladder)
 
-class VCFProcessor extends AudioWorkletProcessor {
-    // inputs:  0 audio  1 cutoff (1 V/oct)  2 cutoff 2  3 cutoff 3
-    // outputs: 0 lowpass
+class FilterProcessor extends AudioWorkletProcessor {
+    // inputs:  0 input  1 cutoff (semitones)
+    // outputs: 0 output
 
     static get parameterDescriptors() {
         return [
             {name: 'cutoff', defaultValue: 1000, minValue: 10,
                 maxValue: 20000, automationRate: 'k-rate'}, // Hz
             {name: 'resonance', defaultValue: 0, minValue: 0, maxValue: 1,
-                automationRate: 'k-rate'},
-            {name: 'audio level', defaultValue: 1, minValue: 0,
-                maxValue: 1, automationRate: 'k-rate'},
-            {name: 'cutoff 2 level', defaultValue: 0, minValue: 0, maxValue: 1,
-                automationRate: 'k-rate'},
-            {name: 'cutoff 3 level', defaultValue: 0, minValue: 0, maxValue: 1,
                 automationRate: 'k-rate'}
         ];
     }
@@ -179,34 +158,24 @@ class VCFProcessor extends AudioWorkletProcessor {
 
     process(inputs, outputs, parameters) {
         var audio = channel(inputs, 0),
-            cv1 = channel(inputs, 1),
-            cv2 = channel(inputs, 2),
-            cv3 = channel(inputs, 3),
+            cv = channel(inputs, 1),
             out = outputs[0][0],
             n = out.length,
             fKnob = param(parameters, 'cutoff', 0),
-            res = param(parameters, 'resonance', 0),
-            level = param(parameters, 'audio level', 0),
-            cv2Level = param(parameters, 'cutoff 2 level', 0),
-            cv3Level = param(parameters, 'cutoff 3 level', 0),
-            k = res * 5, // feedback; above 4 the filter self-oscillates
+            k = param(parameters, 'resonance', 0) * 5, // feedback amount
             maxFc = Math.min(20000, sampleRate * 0.45),
-            i, volts, fc, g, G, S, u, x, v,
+            i, fc, g, G, S, u, x, v,
             s1 = this.s1, s2 = this.s2, s3 = this.s3, s4 = this.s4;
 
         // zero-delay-feedback ladder: four one-pole stages with feedback
         for (i = 0; i < n; i += 1) {
-            volts = 0;
-            if (cv1) {volts += cv1[i]; }
-            if (cv2) {volts += cv2[i] * cv2Level; }
-            if (cv3) {volts += cv3[i] * cv3Level; }
-            fc = fKnob * Math.pow(2, volts);
+            fc = cv ? fKnob * Math.pow(2, cv[i] / 12) : fKnob;
             if (fc > maxFc) {fc = maxFc; }
             if (fc < 1) {fc = 1; }
             g = Math.tan(Math.PI * fc / sampleRate);
             G = g / (1 + g);
 
-            x = audio ? audio[i] * level / AUDIO_LEVEL : 0;
+            x = audio ? audio[i] : 0;
             S = (1 - G) * (G * G * G * s1 + G * G * s2 + G * s3 + s4);
             u = (x - k * S) / (1 + k * G * G * G * G);
             u = 2 * Math.tanh(u / 2); // soft saturation bounds the feedback
@@ -216,65 +185,50 @@ class VCFProcessor extends AudioWorkletProcessor {
             v = (u - s3) * G; u = v + s3; s3 = u + v;
             v = (u - s4) * G; u = v + s4; s4 = u + v;
 
-            out[i] = u * AUDIO_LEVEL;
+            out[i] = u;
         }
         this.s1 = s1; this.s2 = s2; this.s3 = s3; this.s4 = s4;
         return true;
     }
 }
 
-// VCA (after the A-130 "Linear VCA")
+// volume
 
-class VCAProcessor extends AudioWorkletProcessor {
-    // inputs:  0 audio 1  1 audio 2  2 loudness  3 loudness 2
-    // outputs: 0 out
+class VolumeProcessor extends AudioWorkletProcessor {
+    // inputs:  0 input  1 level (fraction of full)
+    // outputs: 0 output
 
     static get parameterDescriptors() {
         return [
-            {name: 'loudness', defaultValue: 0, minValue: 0, maxValue: 1,
-                automationRate: 'k-rate'},
-            {name: 'audio 1 level', defaultValue: 1, minValue: 0,
-                maxValue: 1, automationRate: 'k-rate'},
-            {name: 'audio 2 level', defaultValue: 1, minValue: 0,
-                maxValue: 1, automationRate: 'k-rate'},
-            {name: 'loudness 2 level', defaultValue: 0, minValue: 0, maxValue: 1,
+            {name: 'level', defaultValue: 1, minValue: 0, maxValue: 1,
                 automationRate: 'k-rate'}
         ];
     }
 
     process(inputs, outputs, parameters) {
-        var in1 = channel(inputs, 0),
-            in2 = channel(inputs, 1),
-            cv1 = channel(inputs, 2),
-            cv2 = channel(inputs, 3),
+        var audio = channel(inputs, 0),
+            cv = channel(inputs, 1),
             out = outputs[0][0],
             n = out.length,
-            gain = param(parameters, 'loudness', 0),
-            l1 = param(parameters, 'audio 1 level', 0),
-            l2 = param(parameters, 'audio 2 level', 0),
-            cv2Level = param(parameters, 'loudness 2 level', 0),
-            i, a, x;
+            knob = param(parameters, 'level', 0),
+            i, a;
 
         for (i = 0; i < n; i += 1) {
-            a = gain;
-            if (cv1) {a += cv1[i] / AUDIO_LEVEL; } // unity gain at +5 V
-            if (cv2) {a += cv2[i] * cv2Level / AUDIO_LEVEL; }
+            a = knob;
+            if (cv) {a += cv[i]; }
             if (a < 0) {a = 0; }
-            if (a > 2) {a = 2; }
-            x = 0;
-            if (in1) {x += in1[i] * l1; }
-            if (in2) {x += in2[i] * l2; }
-            out[i] = x * a;
+            if (a > 1) {a = 1; }
+            out[i] = audio ? audio[i] * a : 0;
         }
         return true;
     }
 }
 
-// ADSR (after the A-140 "ADSR" envelope generator)
+// envelope
 
-class ADSRProcessor extends AudioWorkletProcessor {
-    // inputs:  0 gate  1 retrigger
-    // outputs: 0 envelope  1 inverted
+class EnvelopeProcessor extends AudioWorkletProcessor {
+    // inputs:  0 key held
+    // outputs: 0 output (0 .. amount)
 
     static get parameterDescriptors() {
         return [
@@ -286,8 +240,10 @@ class ADSRProcessor extends AudioWorkletProcessor {
                 automationRate: 'k-rate'},                 // fraction
             {name: 'release', defaultValue: 0.5, minValue: 0.001,
                 maxValue: 20, automationRate: 'k-rate'},   // seconds
-            {name: 'gate', defaultValue: 0, minValue: 0, maxValue: 1,
-                automationRate: 'k-rate'}                  // manual gate
+            {name: 'amount', defaultValue: 1, minValue: 0, maxValue: 100,
+                automationRate: 'k-rate'},                 // output peak
+            {name: 'key held', defaultValue: 0, minValue: 0, maxValue: 1,
+                automationRate: 'k-rate'}                  // set by block
         ];
     }
 
@@ -295,45 +251,34 @@ class ADSRProcessor extends AudioWorkletProcessor {
         super();
         this.level = 0;        // 0 .. 1
         this.stage = 'idle';   // idle | attack | decay | sustain | release
-        this.gateWasHigh = false;
-        this.lastRetrig = 0;
+        this.wasHeld = false;
     }
 
     process(inputs, outputs, parameters) {
-        var gateIn = channel(inputs, 0),
-            retrig = channel(inputs, 1),
-            env = outputs[0][0],
-            inv = outputs[1][0],
-            n = env.length,
+        var keyIn = channel(inputs, 0),
+            out = outputs[0][0],
+            n = out.length,
             attack = param(parameters, 'attack', 0),
             decay = param(parameters, 'decay', 0),
             sustain = param(parameters, 'sustain', 0),
             release = param(parameters, 'release', 0),
-            manual = param(parameters, 'gate', 0) > 0.5,
+            amount = param(parameters, 'amount', 0),
+            manual = param(parameters, 'key held', 0) > ON,
             // per-sample coefficients; a stage settles in about its time
             aStep = 1 / (attack * sampleRate),
             dCoef = 1 - Math.exp(-4 / (decay * sampleRate)),
             rCoef = 1 - Math.exp(-4 / (release * sampleRate)),
-            i, high, r;
+            i, held;
 
         for (i = 0; i < n; i += 1) {
-            high = manual || (gateIn ? gateIn[i] > GATE_THRESHOLD : false);
+            held = manual || (keyIn ? keyIn[i] > ON : false);
 
-            if (high && !this.gateWasHigh) {
+            if (held && !this.wasHeld) {
                 this.stage = 'attack';
-            } else if (!high && this.gateWasHigh) {
+            } else if (!held && this.wasHeld) {
                 this.stage = 'release';
             }
-            this.gateWasHigh = high;
-
-            if (retrig) {
-                r = retrig[i];
-                if (r > GATE_THRESHOLD && this.lastRetrig <= GATE_THRESHOLD
-                        && high) {
-                    this.stage = 'attack';
-                }
-                this.lastRetrig = r;
-            }
+            this.wasHeld = held;
 
             switch (this.stage) {
             case 'attack':
@@ -364,56 +309,67 @@ class ADSRProcessor extends AudioWorkletProcessor {
                 this.level = 0;
             }
 
-            env[i] = this.level * ENV_PEAK;
-            inv[i] = -env[i];
+            out[i] = this.level * amount;
         }
         return true;
     }
 }
 
-// LFO (after the A-145 "Low Frequency Oscillator")
+// wobble (low frequency oscillator)
 
-class LFOProcessor extends AudioWorkletProcessor {
-    // inputs:  0 reset
-    // outputs: 0 sine  1 triangle  2 saw  3 square
+class WobbleProcessor extends AudioWorkletProcessor {
+    // inputs:  0 trigger
+    // outputs: 0 output (-amount .. +amount)
 
     static get parameterDescriptors() {
         return [
-            {name: 'frequency', defaultValue: 2, minValue: 0.01,
-                maxValue: 500, automationRate: 'k-rate'} // Hz
+            {name: 'wave', defaultValue: 0, minValue: 0, maxValue: 3,
+                automationRate: 'k-rate'}, // 0 sine 1 triangle 2 saw 3 square
+            {name: 'speed', defaultValue: 2, minValue: 0.01, maxValue: 500,
+                automationRate: 'k-rate'}, // Hz
+            {name: 'amount', defaultValue: 1, minValue: 0, maxValue: 100,
+                automationRate: 'k-rate'}
         ];
     }
 
     constructor() {
         super();
         this.phase = 0;
-        this.lastReset = 0;
+        this.lastRestart = 0;
     }
 
     process(inputs, outputs, parameters) {
-        var reset = channel(inputs, 0),
-            sin = outputs[0][0],
-            tri = outputs[1][0],
-            saw = outputs[2][0],
-            sqr = outputs[3][0],
-            n = sin.length,
-            dt = param(parameters, 'frequency', 0) / sampleRate,
-            i, t, r;
+        var restart = channel(inputs, 0),
+            out = outputs[0][0],
+            n = out.length,
+            wave = Math.round(param(parameters, 'wave', 0)),
+            dt = param(parameters, 'speed', 0) / sampleRate,
+            amount = param(parameters, 'amount', 0),
+            i, t, r, v;
 
         for (i = 0; i < n; i += 1) {
-            // restart the cycle on a rising edge at the reset input
-            if (reset) {
-                r = reset[i];
-                if (r > GATE_THRESHOLD && this.lastReset <= GATE_THRESHOLD) {
+            if (restart) {
+                r = restart[i];
+                if (r > ON && this.lastRestart <= ON) {
                     this.phase = 0;
                 }
-                this.lastReset = r;
+                this.lastRestart = r;
             }
             t = this.phase;
-            sin[i] = Math.sin(TWO_PI * t) * AUDIO_LEVEL;
-            tri[i] = (t < 0.5 ? 4 * t - 1 : 3 - 4 * t) * AUDIO_LEVEL;
-            saw[i] = (2 * t - 1) * AUDIO_LEVEL;
-            sqr[i] = (t < 0.5 ? 1 : -1) * AUDIO_LEVEL;
+            switch (wave) {
+            case 1:
+                v = t < 0.5 ? 4 * t - 1 : 3 - 4 * t;
+                break;
+            case 2:
+                v = 2 * t - 1;
+                break;
+            case 3:
+                v = t < 0.5 ? 1 : -1;
+                break;
+            default:
+                v = Math.sin(TWO_PI * t);
+            }
+            out[i] = v * amount;
             this.phase += dt;
             if (this.phase >= 1) {this.phase -= 1; }
         }
@@ -421,8 +377,8 @@ class LFOProcessor extends AudioWorkletProcessor {
     }
 }
 
-registerProcessor('a100-vco', VCOProcessor);
-registerProcessor('a100-vcf', VCFProcessor);
-registerProcessor('a100-vca', VCAProcessor);
-registerProcessor('a100-adsr', ADSRProcessor);
-registerProcessor('a100-lfo', LFOProcessor);
+registerProcessor('modular-oscillator', OscillatorProcessor);
+registerProcessor('modular-filter', FilterProcessor);
+registerProcessor('modular-volume', VolumeProcessor);
+registerProcessor('modular-envelope', EnvelopeProcessor);
+registerProcessor('modular-wobble', WobbleProcessor);

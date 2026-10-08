@@ -2806,7 +2806,7 @@
   {
     "fileName": "modular.xml",
     "name": "Modular Synth",
-    "description": "Patch together virtual Doepfer A-100 style synthesizer modules: VCO, VCF, VCA, ADSR and LFO",
+    "description": "Build sounds by patching together simple synthesizer modules: oscillator, filter, volume, envelope and wobble",
     "searchData": [
       "create _ module named _",
       "delete module _",
@@ -2815,9 +2815,9 @@
       "disconnect _ _",
       "set _ _ to _",
       "_ _",
-      "gate _ _",
+      "key held on _ _",
       "modules",
-      "note _ as volts"
+      "note _ as pitch"
     ],
     "categories": [
       "Modular"

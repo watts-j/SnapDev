@@ -1,13 +1,12 @@
 /*
     modular.js
 
-    Snap! extension primitives for the "Modular Synth" library,
-    modelled after modules of the Doepfer A-100 system.
+    Snap! extension primitives for the "Modular Synth" library.
 
     Modules are AudioWorklet nodes (see modular-worklet.js). Their
-    patch jacks are node inputs / outputs, their knobs are AudioParams.
+    jacks are node inputs / outputs, their knobs are AudioParams.
     Scripts only create modules, turn knobs and patch cables; every
-    signal, including control voltages, stays inside Web Audio.
+    signal, including control signals, stays inside Web Audio.
 
     primitives (prefix "syn_"):
         syn_create(type, name)
@@ -17,17 +16,19 @@
         syn_disconnect(module, input)
         syn_set(module, knob, value)
         syn_get(module, knob)
-        syn_gate(module, bool)
+        syn_key(module, bool)
         syn_modules()
 
     menus (prefix "syn_"):
-        syn_types, syn_names, syn_outputs, syn_inputs, syn_knobs
+        syn_names, syn_outputs, syn_inputs, syn_knobs
 */
 
 /*global SnapExtensions, Note, List, AudioWorkletNode, BlockMorph*/
 
 (function () {
     'use strict';
+
+    var WAVES = ['sine', 'triangle', 'saw', 'square'];
 
     var Modular = {
         workletURL: 'libraries/modular/modular-worklet.js',
@@ -38,38 +39,35 @@
         speaker: null,      // master GainNode
 
         types: {
-            VCO: {
-                processor: 'a100-vco',
-                inputs: ['pitch', 'pitch 2', 'width', 'sync'],
+            oscillator: {
+                processor: 'modular-oscillator',
+                inputs: ['pitch', 'trigger'],
                 outputs: ['saw', 'square', 'triangle', 'sine'],
-                knobs: ['octave', 'semitones', 'pulse width',
-                    'pitch 2 level', 'width level']
+                knobs: ['octave', 'tune', 'pulse width']
             },
-            VCF: {
-                processor: 'a100-vcf',
-                inputs: ['audio', 'cutoff', 'cutoff 2', 'cutoff 3'],
-                outputs: ['lowpass'],
-                knobs: ['cutoff', 'resonance', 'audio level',
-                    'cutoff 2 level', 'cutoff 3 level']
+            filter: {
+                processor: 'modular-filter',
+                inputs: ['input', 'cutoff'],
+                outputs: ['output'],
+                knobs: ['cutoff', 'resonance']
             },
-            VCA: {
-                processor: 'a100-vca',
-                inputs: ['audio 1', 'audio 2', 'loudness', 'loudness 2'],
-                outputs: ['out'],
-                knobs: ['loudness', 'audio 1 level', 'audio 2 level',
-                    'loudness 2 level']
+            volume: {
+                processor: 'modular-volume',
+                inputs: ['input', 'level'],
+                outputs: ['output'],
+                knobs: ['level']
             },
-            ADSR: {
-                processor: 'a100-adsr',
-                inputs: ['gate', 'retrigger'],
-                outputs: ['envelope', 'inverted'],
-                knobs: ['attack', 'decay', 'sustain', 'release']
+            envelope: {
+                processor: 'modular-envelope',
+                inputs: ['key held'],
+                outputs: ['output'],
+                knobs: ['attack', 'decay', 'sustain', 'release', 'amount']
             },
-            LFO: {
-                processor: 'a100-lfo',
-                inputs: ['reset'],
-                outputs: ['sine', 'triangle', 'saw', 'square'],
-                knobs: ['frequency']
+            wobble: {
+                processor: 'modular-wobble',
+                inputs: ['trigger'],
+                outputs: ['output'],
+                knobs: ['wave', 'speed', 'amount']
             }
         }
     };
@@ -106,13 +104,13 @@
         var ctx = this.context();
         if (!this.speaker) {
             this.speaker = ctx.createGain();
-            this.speaker.gain.value = 1 / 5; // +-5 V -> full scale
+            this.speaker.gain.value = 0.5; // volume 1 leaves mixing headroom
             this.speaker.connect(ctx.destination);
             this.modules.set('speaker', {
                 name: 'speaker',
                 type: 'speaker',
                 node: this.speaker,
-                inputs: ['in'],
+                inputs: ['input'],
                 outputs: [],
                 knobs: ['volume']
             });
@@ -178,7 +176,7 @@
     };
 
     Modular.create = function (type, name) {
-        var key = String(type).toUpperCase(),
+        var key = String(type).toLowerCase(),
             spec = this.types[key],
             id = String(name),
             node, rec;
@@ -215,7 +213,7 @@
         }
         this.connections = this.connections.filter(c => {
             if (c.src === rec || c.dst === rec) {
-                c.src.node.disconnect(c.dst.node, c.out, c.in);
+                this.unplug(c);
                 return false;
             }
             return true;
@@ -229,6 +227,14 @@
                 this.remove(name);
             }
         });
+    };
+
+    Modular.unplug = function (c) {
+        if (c.dst.type === 'speaker') {
+            c.src.node.disconnect(c.dst.node, c.out);
+        } else {
+            c.src.node.disconnect(c.dst.node, c.out, c.in);
+        }
     };
 
     Modular.connect = function (srcName, output, dstName, input) {
@@ -255,11 +261,7 @@
             inp = this.jackIndex(dst, 'inputs', input);
         this.connections = this.connections.filter(c => {
             if (c.dst === dst && c.in === inp) {
-                if (dst.type === 'speaker') {
-                    c.src.node.disconnect(dst.node, c.out);
-                } else {
-                    c.src.node.disconnect(dst.node, c.out, c.in);
-                }
+                this.unplug(c);
                 return false;
             }
             return true;
@@ -269,13 +271,28 @@
     Modular.set = function (name, knob, value) {
         var rec = this.module(name),
             p = this.knob(rec, knob),
-            v = +value,
-            ctx = this.context();
-        if (isNaN(v)) {
-            throw new Error('expecting a number but getting "' + value + '"');
+            v, ctx = this.context();
+        if (String(knob) === 'wave') {
+            v = WAVES.indexOf(String(value).toLowerCase());
+            if (v < 0) {
+                v = +value - 1; // also accept 1 .. 4
+            }
+            if (isNaN(v) || v < 0 || v > 3) {
+                throw new Error(
+                    'expecting one of ' + WAVES.join(', ') +
+                    ' but getting "' + value + '"'
+                );
+            }
+        } else {
+            v = +value;
+            if (isNaN(v)) {
+                throw new Error(
+                    'expecting a number but getting "' + value + '"'
+                );
+            }
         }
         if (rec.type === 'speaker') {
-            v = Math.max(0, Math.min(1, v)) / 5;
+            v = Math.max(0, Math.min(1, v)) * 0.5;
         } else {
             v = Math.max(p.minValue, Math.min(p.maxValue, v));
         }
@@ -285,19 +302,26 @@
 
     Modular.get = function (name, knob) {
         var rec = this.module(name),
-            p = this.knob(rec, knob);
+            p = this.knob(rec, knob),
+            v = p.value;
+        if (String(knob) === 'wave') {
+            return WAVES[Math.round(v)];
+        }
+        if (rec.type === 'speaker') {
+            v *= 2;
+        }
         // AudioParams hold single-precision floats, round them for display
-        return Math.round((rec.type === 'speaker' ? p.value * 5 : p.value)
-            * 1e6) / 1e6;
+        return Math.round(v * 1e6) / 1e6;
     };
 
-    Modular.gate = function (name, on) {
+    Modular.key = function (name, held) {
         var rec = this.module(name),
-            p = rec.node.parameters ? rec.node.parameters.get('gate') : null;
+            p = rec.node.parameters ?
+                rec.node.parameters.get('key held') : null;
         if (!p) {
-            throw new Error('module "' + rec.name + '" has no gate');
+            throw new Error('module "' + rec.name + '" has no key');
         }
-        p.setValueAtTime(on ? 1 : 0, this.context().currentTime);
+        p.setValueAtTime(held ? 1 : 0, this.context().currentTime);
     };
 
     // primitives
@@ -354,9 +378,9 @@
     );
 
     SnapExtensions.primitives.set(
-        'syn_gate(module, bool)',
-        function (name, on) {
-            Modular.gate(name, on === true);
+        'syn_key(module, bool)',
+        function (name, held) {
+            Modular.key(name, held === true);
         }
     );
 
@@ -383,13 +407,6 @@
             name = idx > 0 ? inputs[idx - 1].evaluate() : null;
         return name ? Modular.modules.get(String(name)) : null;
     }
-
-    SnapExtensions.menus.set(
-        'syn_types',
-        function () {
-            return dict(Object.keys(Modular.types));
-        }
-    );
 
     SnapExtensions.menus.set(
         'syn_names',
