@@ -373,8 +373,395 @@ class WobbleProcessor extends AudioWorkletProcessor {
     }
 }
 
+// delay (echo)
+
+class DelayProcessor extends AudioWorkletProcessor {
+    // inputs:  0 input
+    // outputs: 0 output
+
+    static get parameterDescriptors() {
+        return [
+            {name: 'time', defaultValue: 0.5, minValue: 0.001, maxValue: 5,
+                automationRate: 'k-rate'},      // seconds
+            {name: 'repeats', defaultValue: 0.4, minValue: 0, maxValue: 0.95,
+                automationRate: 'k-rate'},      // feedback, fraction
+            {name: 'blend', defaultValue: 0.5, minValue: 0, maxValue: 1,
+                automationRate: 'k-rate'}       // echo share, fraction
+        ];
+    }
+
+    constructor() {
+        super();
+        this.size = Math.ceil(sampleRate * 5) + 1;
+        this.buffer = new Float32Array(this.size);
+        this.write = 0;
+    }
+
+    process(inputs, outputs, parameters) {
+        var audio = channel(inputs, 0),
+            out = outputs[0][0],
+            n = out.length,
+            delay = Math.max(1, Math.round(
+                param(parameters, 'time', 0) * sampleRate)),
+            fb = param(parameters, 'repeats', 0),
+            blend = param(parameters, 'blend', 0),
+            i, x, read, echo;
+
+        for (i = 0; i < n; i += 1) {
+            x = audio ? audio[i] : 0;
+            read = this.write - delay;
+            if (read < 0) {read += this.size; }
+            echo = this.buffer[read];
+            this.buffer[this.write] = x + echo * fb;
+            this.write += 1;
+            if (this.write >= this.size) {this.write = 0; }
+            out[i] = x * (1 - blend) + echo * blend;
+        }
+        return true;
+    }
+}
+
+// noise / random
+
+class NoiseProcessor extends AudioWorkletProcessor {
+    // inputs:  0 trigger (new random step)
+    // outputs: 0 output
+
+    static get parameterDescriptors() {
+        return [
+            {name: 'kind', defaultValue: 0, minValue: 0, maxValue: 1,
+                automationRate: 'k-rate'},      // 0 white  1 random steps
+            {name: 'speed', defaultValue: 8, minValue: 0.01, maxValue: 500,
+                automationRate: 'k-rate'},      // steps per second
+            {name: 'amount', defaultValue: 1, minValue: 0, maxValue: 100,
+                automationRate: 'k-rate'}
+        ];
+    }
+
+    constructor() {
+        super();
+        this.held = 0;
+        this.counter = 0;
+        this.lastTrig = 0;
+    }
+
+    process(inputs, outputs, parameters) {
+        var trig = channel(inputs, 0),
+            out = outputs[0][0],
+            n = out.length,
+            kind = Math.round(param(parameters, 'kind', 0)),
+            period = sampleRate / param(parameters, 'speed', 0),
+            amount = param(parameters, 'amount', 0),
+            i, tr;
+
+        for (i = 0; i < n; i += 1) {
+            if (kind === 0) {
+                out[i] = (Math.random() * 2 - 1) * amount;
+                continue;
+            }
+            this.counter += 1;
+            if (this.counter >= period) {
+                this.counter = 0;
+                this.held = Math.random() * 2 - 1;
+            }
+            if (trig) {
+                tr = trig[i];
+                if (tr > ON && this.lastTrig <= ON) {
+                    this.held = Math.random() * 2 - 1;
+                    this.counter = 0;
+                }
+                this.lastTrig = tr;
+            }
+            out[i] = this.held * amount;
+        }
+        return true;
+    }
+}
+
+// ring modulator
+
+class RingProcessor extends AudioWorkletProcessor {
+    // inputs:  0 input  1 input 2
+    // outputs: 0 output
+
+    static get parameterDescriptors() {
+        return [];
+    }
+
+    process(inputs, outputs) {
+        var a = channel(inputs, 0),
+            b = channel(inputs, 1),
+            out = outputs[0][0],
+            n = out.length,
+            i;
+        for (i = 0; i < n; i += 1) {
+            out[i] = (a ? a[i] : 0) * (b ? b[i] : 0);
+        }
+        return true;
+    }
+}
+
+// wavefolder, also used by the waveform processor
+
+function fold(y) {
+    // reflect a value back into -1 .. +1, as many times as needed
+    var t = (y + 1) / 4;
+    return 4 * Math.abs(t - Math.floor(t + 0.5)) - 1;
+}
+
+class FoldProcessor extends AudioWorkletProcessor {
+    // inputs:  0 input  1 control (percent added to fold)
+    // outputs: 0 output
+
+    static get parameterDescriptors() {
+        return [
+            {name: 'fold', defaultValue: 0, minValue: 0, maxValue: 1,
+                automationRate: 'k-rate'}       // fraction, 1 = 8x gain
+        ];
+    }
+
+    process(inputs, outputs, parameters) {
+        var audio = channel(inputs, 0),
+            cv = channel(inputs, 1),
+            out = outputs[0][0],
+            n = out.length,
+            knob = param(parameters, 'fold', 0),
+            i, f, gain;
+        for (i = 0; i < n; i += 1) {
+            f = knob;
+            if (cv) {f += cv[i] / 100; }
+            if (f < 0) {f = 0; }
+            if (f > 1) {f = 1; }
+            gain = 1 + f * 7;
+            out[i] = fold((audio ? audio[i] : 0) * gain);
+        }
+        return true;
+    }
+}
+
+// audio divider (sub-octave square)
+
+class DividerProcessor extends AudioWorkletProcessor {
+    // inputs:  0 input
+    // outputs: 0 output
+
+    static get parameterDescriptors() {
+        return [
+            {name: 'octaves', defaultValue: 1, minValue: 1, maxValue: 3,
+                automationRate: 'k-rate'}
+        ];
+    }
+
+    constructor() {
+        super();
+        this.last = 0;
+        this.count = 0;
+        this.state = 1;
+    }
+
+    process(inputs, outputs, parameters) {
+        var audio = channel(inputs, 0),
+            out = outputs[0][0],
+            n = out.length,
+            every = Math.pow(2, Math.round(param(parameters, 'octaves', 0)) - 1),
+            i, x;
+        for (i = 0; i < n; i += 1) {
+            x = audio ? audio[i] : 0;
+            if (x > 0 && this.last <= 0) {
+                this.count += 1;
+                if (this.count >= every) {
+                    this.count = 0;
+                    this.state = -this.state;
+                }
+            }
+            this.last = x;
+            out[i] = audio ? this.state : 0;
+        }
+        return true;
+    }
+}
+
+// slew limiter
+
+class SlewProcessor extends AudioWorkletProcessor {
+    // inputs:  0 input
+    // outputs: 0 output
+
+    static get parameterDescriptors() {
+        return [
+            {name: 'rise', defaultValue: 0.1, minValue: 0.001, maxValue: 20,
+                automationRate: 'k-rate'},      // seconds
+            {name: 'fall', defaultValue: 0.1, minValue: 0.001, maxValue: 20,
+                automationRate: 'k-rate'}       // seconds
+        ];
+    }
+
+    constructor() {
+        super();
+        this.level = 0;
+    }
+
+    process(inputs, outputs, parameters) {
+        var cv = channel(inputs, 0),
+            out = outputs[0][0],
+            n = out.length,
+            up = 1 - Math.exp(-4 / (param(parameters, 'rise', 0) * sampleRate)),
+            down = 1 - Math.exp(-4 / (param(parameters, 'fall', 0) * sampleRate)),
+            i, target;
+        for (i = 0; i < n; i += 1) {
+            target = cv ? cv[i] : 0;
+            this.level += (target - this.level) *
+                (target > this.level ? up : down);
+            out[i] = this.level;
+        }
+        return true;
+    }
+}
+
+// trigger divider
+
+class TriggerDividerProcessor extends AudioWorkletProcessor {
+    // inputs:  0 trigger
+    // outputs: 0 output (every n-th gate passes through)
+
+    static get parameterDescriptors() {
+        return [
+            {name: 'divide by', defaultValue: 2, minValue: 1, maxValue: 16,
+                automationRate: 'k-rate'}
+        ];
+    }
+
+    constructor() {
+        super();
+        this.last = 0;
+        this.count = 0;
+        this.pass = false;
+    }
+
+    process(inputs, outputs, parameters) {
+        var trig = channel(inputs, 0),
+            out = outputs[0][0],
+            n = out.length,
+            every = Math.round(param(parameters, 'divide by', 0)),
+            i, tr;
+        for (i = 0; i < n; i += 1) {
+            tr = trig ? trig[i] : 0;
+            if (tr > ON && this.last <= ON) {
+                this.count += 1;
+                if (this.count >= every) {
+                    this.count = 0;
+                    this.pass = true;
+                }
+            } else if (tr <= ON && this.last > ON) {
+                this.pass = false;
+            }
+            this.last = tr;
+            out[i] = this.pass ? 1 : 0;
+        }
+        return true;
+    }
+}
+
+// step sequencers: a shared base that walks steps on an internal
+// clock (tempo in steps per minute) or on a rising edge at the clock
+// input, and takes its step data as text through the message port
+
+class StepProcessor extends AudioWorkletProcessor {
+    static get parameterDescriptors() {
+        return [
+            {name: 'tempo', defaultValue: 120, minValue: 1, maxValue: 1000,
+                automationRate: 'k-rate'}       // steps per minute
+        ];
+    }
+
+    constructor() {
+        super();
+        this.steps = [];
+        this.step = -1;
+        this.counter = 0;
+        this.lastClock = 0;
+        this.clockHigh = false;
+        this.port.onmessage = event => {
+            this.steps = this.parse(String(event.data.text || ''));
+            this.step = -1;
+            this.counter = 0;
+        };
+    }
+
+    advance() {
+        if (this.steps.length) {
+            this.step = (this.step + 1) % this.steps.length;
+        }
+    }
+
+    process(inputs, outputs, parameters) {
+        var clock = channel(inputs, 0),
+            out = outputs[0][0],
+            n = out.length,
+            period = sampleRate * 60 / param(parameters, 'tempo', 0),
+            i, c, phase;
+        for (i = 0; i < n; i += 1) {
+            if (clock) {
+                c = clock[i];
+                if (c > ON && this.lastClock <= ON) {
+                    this.advance();
+                }
+                this.lastClock = c;
+                this.clockHigh = c > ON;
+                out[i] = this.value(this.clockHigh);
+            } else {
+                if (this.counter <= 0) {
+                    this.advance();
+                    this.counter = period;
+                }
+                phase = 1 - this.counter / period; // 0 .. 1 within the step
+                this.counter -= 1;
+                out[i] = this.value(phase < 0.5);
+            }
+        }
+        return true;
+    }
+}
+
+class TriggerSequencerProcessor extends StepProcessor {
+    // inputs:  0 clock
+    // outputs: 0 output (gate)
+
+    parse(text) {
+        return text.replace(/\s+/g, '').split('').map(ch =>
+            ch === 'x' || ch === 'X' || ch === '1' ? 1 : 0);
+    }
+
+    value(high) {
+        return this.step >= 0 && this.steps[this.step] && high ? 1 : 0;
+    }
+}
+
+class SequencerProcessor extends StepProcessor {
+    // inputs:  0 clock
+    // outputs: 0 output (pitch in semitones; MIDI note 69 is 0)
+
+    parse(text) {
+        return text.split(/[\s,]+/).filter(item => item !== '')
+            .map(item => +item - 69).filter(num => !isNaN(num));
+    }
+
+    value() {
+        return this.step >= 0 ? this.steps[this.step] : 0;
+    }
+}
+
 registerProcessor('modular-oscillator', OscillatorProcessor);
 registerProcessor('modular-filter', FilterProcessor);
 registerProcessor('modular-volume', VolumeProcessor);
 registerProcessor('modular-envelope', EnvelopeProcessor);
 registerProcessor('modular-wobble', WobbleProcessor);
+registerProcessor('modular-delay', DelayProcessor);
+registerProcessor('modular-noise', NoiseProcessor);
+registerProcessor('modular-ring', RingProcessor);
+registerProcessor('modular-fold', FoldProcessor);
+registerProcessor('modular-divider', DividerProcessor);
+registerProcessor('modular-slew', SlewProcessor);
+registerProcessor('modular-trigger-divider', TriggerDividerProcessor);
+registerProcessor('modular-trigger-sequencer', TriggerSequencerProcessor);
+registerProcessor('modular-sequencer', SequencerProcessor);

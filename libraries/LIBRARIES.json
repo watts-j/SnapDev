@@ -2806,7 +2806,7 @@
   {
     "fileName": "modular.xml",
     "name": "Modular Synth",
-    "description": "Build sounds from synthesizer modules held in variables: oscillator, filter, ADSR envelope, volume and LFO",
+    "description": "Build sounds from synthesizer modules held in variables: oscillator, filter, envelope, volume, LFO, mix, delay, noise, ring modulator, wavefolder, divider, slew limiter, trigger divider and sequencers",
     "searchData": [
       "create _ _",
       "set oscillator _ _ to _",
@@ -2815,6 +2815,17 @@
       "gate _ _",
       "set volume _ _ to _",
       "set LFO _ _ to _",
+      "set delay _ _ to _",
+      "set noise _ _ to _",
+      "set ring modulator _ _ to _",
+      "set wavefolder _ _ to _",
+      "set waveform processor _ _ to _",
+      "set audio divider _ _ to _",
+      "set slew limiter _ _ to _",
+      "set trigger divider _ _ to _",
+      "set trigger sequencer _ _ to _",
+      "set sequencer _ _ to _",
+      "mix _",
       "set speaker input to _",
       "Preset 1",
       "set preset _ to oscillator _"

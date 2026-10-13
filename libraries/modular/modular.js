@@ -23,6 +23,7 @@
         syn_create(type, name)         makes a global variable holding
                                        a new module
         syn_set(type, module, setting, value)
+        syn_mix(inputs)                -> a mix module summing modules
         syn_gate(module, state)        opens or closes an ADSR's gate
         syn_speaker(module)
         syn_preset(number, module)     copies a module's settings into
@@ -36,25 +37,61 @@
     'use strict';
 
     var WAVES = ['saw', 'square', 'triangle', 'sine'],
+        CHOICES = {                 // settings chosen from a list
+            wave: WAVES,
+            kind: ['white', 'random steps']
+        },
+        TEXT = ['pattern', 'notes'], // settings typed as text
         NUMERIC = ['frequency', 'pulse width', 'cutoff', 'resonance',
             'attack', 'decay', 'sustain', 'release', 'amount', 'level',
-            'speed'],
-        PERCENT = ['pulse width', 'resonance', 'sustain', 'level'], // scaled
+            'speed', 'time', 'repeats', 'blend', 'fold', 'octaves', 'rise',
+            'fall', 'divide by', 'tempo'],
+        PERCENT = ['pulse width', 'resonance', 'sustain', 'level',
+            'repeats', 'blend', 'fold'], // typed 0 to 100, scaled inside
+        PERCENT_MAX = {'pulse width': 99, repeats: 95},
+        PERCENT_MIN = {'pulse width': 1},
         UNITS = {frequency: 'Hz', 'pulse width': '%', cutoff: 'Hz',
             resonance: '%', attack: 's', decay: 's', sustain: '%',
-            release: 's', level: '%', speed: 'Hz'},
+            release: 's', level: '%', speed: 'Hz', time: 's', repeats: '%',
+            blend: '%', fold: '%', rise: 's', fall: 's',
+            tempo: 'steps/min'},
         LABELS = {oscillator: 'an oscillator', filter: 'a filter',
-            adsr: 'an ADSR', volume: 'a volume', lfo: 'an LFO'},
+            adsr: 'an ADSR', volume: 'a volume', lfo: 'an LFO',
+            mix: 'a mix', delay: 'a delay', noise: 'a noise',
+            'ring modulator': 'a ring modulator',
+            wavefolder: 'a wavefolder',
+            'waveform processor': 'a waveform processor',
+            'audio divider': 'an audio divider',
+            'slew limiter': 'a slew limiter',
+            'trigger divider': 'a trigger divider',
+            'trigger sequencer': 'a trigger sequencer',
+            sequencer: 'a sequencer'},
         SET_SPECS = {                                  // "set" block -> type
             "set oscillator %'module' %'setting' to %'value'": 'oscillator',
             "set filter %'module' %'setting' to %'value'": 'filter',
             "set ADSR %'module' %'setting' to %'value'": 'adsr',
             "set volume %'module' %'setting' to %'value'": 'volume',
-            "set LFO %'module' %'setting' to %'value'": 'lfo'
+            "set LFO %'module' %'setting' to %'value'": 'lfo',
+            "set delay %'module' %'setting' to %'value'": 'delay',
+            "set noise %'module' %'setting' to %'value'": 'noise',
+            "set ring modulator %'module' %'setting' to %'value'":
+                'ring modulator',
+            "set wavefolder %'module' %'setting' to %'value'": 'wavefolder',
+            "set waveform processor %'module' %'setting' to %'value'":
+                'waveform processor',
+            "set audio divider %'module' %'setting' to %'value'":
+                'audio divider',
+            "set slew limiter %'module' %'setting' to %'value'":
+                'slew limiter',
+            "set trigger divider %'module' %'setting' to %'value'":
+                'trigger divider',
+            "set trigger sequencer %'module' %'setting' to %'value'":
+                'trigger sequencer',
+            "set sequencer %'module' %'setting' to %'value'": 'sequencer'
         };
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js?v=5',
+        workletURL: 'libraries/modular/modular-worklet.js?v=6',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
@@ -110,6 +147,98 @@
                     ['amount', 1]
                 ],
                 jacks: ['trigger'], // node input 0
+                outputs: 1
+            },
+            mix: {
+                native: 'gain',      // a plain summing node
+                settings: [],
+                jacks: ['inputs'],   // one jack taking a list of modules
+                multi: 'inputs',
+                outputs: 1
+            },
+            delay: {
+                processor: 'modular-delay',
+                settings: [
+                    ['time', 0.5],
+                    ['repeats', 40],
+                    ['blend', 50]
+                ],
+                jacks: ['input'],
+                outputs: 1
+            },
+            noise: {
+                processor: 'modular-noise',
+                settings: [
+                    ['kind', 'white'],
+                    ['speed', 8],
+                    ['amount', 1]
+                ],
+                jacks: ['trigger'],
+                outputs: 1
+            },
+            'ring modulator': {
+                processor: 'modular-ring',
+                settings: [],
+                jacks: ['input', 'input 2'],
+                outputs: 1
+            },
+            wavefolder: {
+                processor: 'modular-fold',
+                settings: [
+                    ['fold', 50]
+                ],
+                jacks: ['input'],
+                outputs: 1
+            },
+            'waveform processor': {
+                processor: 'modular-fold',
+                settings: [
+                    ['fold', 50]
+                ],
+                jacks: ['input', 'control'],
+                outputs: 1
+            },
+            'audio divider': {
+                processor: 'modular-divider',
+                settings: [
+                    ['octaves', 1]
+                ],
+                jacks: ['input'],
+                outputs: 1
+            },
+            'slew limiter': {
+                processor: 'modular-slew',
+                settings: [
+                    ['rise', 0.1],
+                    ['fall', 0.1]
+                ],
+                jacks: ['input'],
+                outputs: 1
+            },
+            'trigger divider': {
+                processor: 'modular-trigger-divider',
+                settings: [
+                    ['divide by', 2]
+                ],
+                jacks: ['trigger'],
+                outputs: 1
+            },
+            'trigger sequencer': {
+                processor: 'modular-trigger-sequencer',
+                settings: [
+                    ['pattern', 'x.x.x.x.'],
+                    ['tempo', 120]
+                ],
+                jacks: ['clock'],
+                outputs: 1
+            },
+            sequencer: {
+                processor: 'modular-sequencer',
+                settings: [
+                    ['notes', '69 72 76 79'],
+                    ['tempo', 120]
+                ],
+                jacks: ['clock'],
                 outputs: 1
             }
         }
@@ -271,11 +400,15 @@
             throw new Error('modules are plugged into each other in a loop');
         }
         visiting.add(list);
-        node = new AudioWorkletNode(this.context(), spec.processor, {
-            numberOfInputs: spec.jacks.length,
-            numberOfOutputs: spec.outputs,
-            outputChannelCount: [1]
-        });
+        if (spec.native === 'gain') {
+            node = this.context().createGain();
+        } else {
+            node = new AudioWorkletNode(this.context(), spec.processor, {
+                numberOfInputs: spec.jacks.length,
+                numberOfOutputs: spec.outputs,
+                outputChannelCount: [1]
+            });
+        }
         rec = {node: node, cables: {}};
         this.nodes.set(list, rec);
         spec.settings.forEach(pair => {
@@ -286,12 +419,52 @@
         });
         spec.jacks.forEach(jack => {
             var row = this.row(list, jack),
-                source = this.resolve(row ? row.at(2) : '', jack);
+                source;
+            if (jack === spec.multi) {
+                this.plugAll(list, rec, row ? row.at(2) : null, visiting);
+                return;
+            }
+            source = this.resolve(row ? row.at(2) : '', jack);
             if (source instanceof List) {
                 this.plug(list, rec, jack, source, visiting);
             }
         });
         return rec;
+    };
+
+    Modular.plugAll = function (list, rec, sources, visiting) {
+        // connect every module in a list of sources into a mix node
+        var items = sources instanceof List ? sources.itemsArray() : [];
+        (rec.cables.inputs || []).forEach(src => {
+            try {
+                src.node.disconnect(rec.node);
+            } catch (ignored) {
+                // already disconnected
+            }
+        });
+        rec.cables.inputs = [];
+        items.forEach(item => {
+            var source = this.resolve(item, 'inputs'),
+                srcRec;
+            if (source instanceof List) {
+                srcRec = this.ensure(source, visiting);
+                srcRec.node.connect(rec.node);
+                rec.cables.inputs.push(srcRec);
+            }
+        });
+    };
+
+    Modular.mix = function (sources) {
+        // answer a new mix module summing the given modules
+        var items = sources instanceof List ? sources.itemsArray() : [],
+            list = new List([
+                new List(['type', 'mix']),
+                new List(['inputs', new List(items.filter(item =>
+                    item !== '' && item !== null && item !== undefined
+                ))])
+            ]);
+        this.ensure(list);
+        return list;
     };
 
     Modular.plug = function (list, rec, jack, source, visiting) {
@@ -320,19 +493,25 @@
     };
 
     Modular.applySetting = function (list, rec, key, value) {
-        var p = rec.node.parameters.get(key === 'wave' ? 'wave' : key),
-            ctx = this.context(),
-            v;
-        if (key === 'wave') {
-            v = WAVES.indexOf(String(value).toLowerCase());
+        var ctx = this.context(),
+            choices = CHOICES[key],
+            p, v;
+        if (TEXT.indexOf(key) > -1) {
+            v = String(value);
+            rec.node.port.postMessage({text: v});
+            return v;
+        }
+        p = rec.node.parameters.get(key);
+        if (choices) {
+            v = choices.indexOf(String(value).toLowerCase());
             if (v < 0) {
                 throw new Error(
-                    'expecting one of ' + WAVES.join(', ') +
+                    'expecting one of ' + choices.join(', ') +
                     ' but getting "' + value + '"'
                 );
             }
             p.setValueAtTime(v, ctx.currentTime);
-            return WAVES[v];
+            return choices[v];
         }
         v = +value;
         if (isNaN(v)) {
@@ -341,8 +520,8 @@
             );
         }
         if (PERCENT.indexOf(key) > -1) {
-            v = Math.max(key === 'pulse width' ? 1 : 0,
-                Math.min(key === 'pulse width' ? 99 : 100, v));
+            v = Math.max(PERCENT_MIN[key] || 0,
+                Math.min(PERCENT_MAX[key] || 100, v));
             p.cancelScheduledValues(ctx.currentTime);
             p.setTargetAtTime(v / 100, ctx.currentTime, 0.005);
             return v;
@@ -532,6 +711,16 @@
     );
 
     SnapExtensions.primitives.set(
+        'syn_mix(inputs)',
+        function (sources, proc) {
+            Modular.sprite = this;
+            if (Modular.waitUntilReady(proc)) {
+                return Modular.mix(sources);
+            }
+        }
+    );
+
+    SnapExtensions.primitives.set(
         'syn_gate(module, state)',
         function (list, state, proc) {
             Modular.sprite = this;
@@ -586,16 +775,21 @@
             def = spec ? spec.settings.find(pair => pair[0] === setting)
                 : null;
         applyShape(valueSlot, setting);
-        if (setting === 'wave') {
-            if (WAVES.indexOf(String(current)) < 0) {
-                valueSlot.setContents(def ? def[1] : 'saw');
+        if (CHOICES[setting]) {
+            if (CHOICES[setting].indexOf(String(current)) < 0) {
+                valueSlot.setContents(def ? def[1] : CHOICES[setting][0]);
             }
         } else if (NUMERIC.indexOf(setting) > -1) {
             if (current === '' || isNaN(+current)) {
                 valueSlot.setContents(def ? def[1] : 0);
             }
-        } else if (WAVES.indexOf(String(current)) > -1 ||
-                !isNaN(+current)) {
+        } else if (TEXT.indexOf(setting) > -1) {
+            if (current === '') {
+                valueSlot.setContents(def ? def[1] : '');
+            }
+        } else if (!(current === '' || Modular.moduleNames(
+                Modular.sprite || valueSlot.parentThatIsA(IDE_Morph)
+                    .currentSprite).indexOf(String(current)) > -1)) {
             valueSlot.setContents('');
         }
         valueSlot.fixLayout();
@@ -612,7 +806,7 @@
         // answer true if the shape changed
         var before = String(valueSlot.choices) + valueSlot.isReadOnly;
         valueSlot.isModularValue = true;
-        if (NUMERIC.indexOf(setting) > -1) {
+        if (NUMERIC.indexOf(setting) > -1 || TEXT.indexOf(setting) > -1) {
             valueSlot.isReadOnly = false;
             valueSlot.choices = null;
             valueSlot.arrow().setSize(0); // so clicks reach the text
@@ -706,8 +900,8 @@
                 spec = Modular.types[blockType(this)],
                 menu = {};
             shapeFromSetting(this);
-            if (setting === 'wave') {
-                WAVES.forEach(wave => {menu[wave] = wave; });
+            if (CHOICES[setting]) {
+                CHOICES[setting].forEach(item => {menu[item] = item; });
             } else if (spec && spec.jacks.indexOf(setting) > -1) {
                 if (sprite) {
                     Modular.moduleNames(sprite).forEach(name => {
