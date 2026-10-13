@@ -19,12 +19,16 @@
     rebuilt from the settings the next time a block touches the list.
 
     primitives (prefix "syn_"):
-        syn_new(type)                  -> settings list
+        syn_create(type, name)         makes a global variable holding
+                                       a new module
         syn_set(module, setting, value)
         syn_speaker(module)
+        syn_preset(number, module)     copies a module's settings into
+                                       the body of the "Preset <n>" block
 */
 
-/*global SnapExtensions, Note, List, AudioWorkletNode, StageMorph*/
+/*global SnapExtensions, Note, List, AudioWorkletNode, StageMorph,
+  IDE_Morph, Context*/
 
 (function () {
     'use strict';
@@ -324,18 +328,87 @@
         };
     }
 
+    // variables
+
+    Modular.createVariable = function (sprite, type, name) {
+        // make (or reuse) a global variable and put a new module in it
+        var frame = sprite.globalVariables(),
+            ide = sprite.parentThatIsA(IDE_Morph),
+            id = String(name).trim();
+        if (!id) {
+            throw new Error('the oscillator needs a name');
+        }
+        if (frame.vars[id] === undefined) {
+            frame.addVar(id);
+        }
+        frame.setVar(id, this.create(type));
+        if (ide) {
+            ide.flushBlocksCache('variables');
+            ide.refreshPalette();
+        }
+    };
+
+    // presets
+
+    Modular.presetXML = function (list) {
+        // answer the XML of a script reporting a copy of the settings,
+        // with the jacks left empty
+        var spec = this.spec(list),
+            esc = txt => String(txt).replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;').replace(/>/g, '&gt;'),
+            pair = (key, val) => '<block s="reportNewList"><list><l>' +
+                esc(key) + '</l><l>' + esc(val) + '</l></list></block>',
+            items = [pair('type', this.typeOf(list))];
+        spec.settings.forEach(setting => {
+            var row = this.row(list, setting[0]);
+            items.push(pair(setting[0], row ? row.at(2) : setting[1]));
+        });
+        spec.jacks.forEach(jack => {
+            items.push(pair(jack, ''));
+        });
+        return '<script><block s="doReport"><block s="reportNewList">' +
+            '<list>' + items.join('') + '</list></block></block></script>';
+    };
+
+    Modular.savePreset = function (sprite, number, list) {
+        var ide = sprite.parentThatIsA(IDE_Morph),
+            stage = ide.stage,
+            spec = 'Preset ' + String(number).trim(),
+            def = stage.globalBlocks.find(each => each.spec === spec),
+            model, script;
+        this.spec(list); // make sure it is a module
+        if (!def) {
+            throw new Error('there is no block named "' + spec + '"');
+        }
+        model = ide.serializer.parse(this.presetXML(list));
+        script = ide.serializer.loadScript(model, stage);
+        def.body = new Context(null, script, null, stage);
+        def.body.inputs = [];
+        stage.allBlockInstances(def).forEach(block => block.refresh());
+        ide.flushPaletteCache();
+        ide.refreshPalette();
+        ide.recordUnsavedChanges();
+    };
+
     // primitives
 
     SnapExtensions.primitives.set(
-        'syn_new(type)',
-        function (type, proc) {
+        'syn_create(type, name)',
+        function (type, name, proc) {
             var key = String(type).toLowerCase();
             if (!Modular.types[key]) {
                 throw new Error('unknown module type "' + type + '"');
             }
             if (Modular.waitUntilReady(proc)) {
-                return Modular.create(key);
+                Modular.createVariable(this, key, name);
             }
+        }
+    );
+
+    SnapExtensions.primitives.set(
+        'syn_preset(number, module)',
+        function (number, list) {
+            Modular.savePreset(this, number, list);
         }
     );
 
