@@ -2806,13 +2806,14 @@
   {
     "fileName": "modular.xml",
     "name": "Modular Synth",
-    "description": "Build sounds from synthesizer modules held in variables: oscillator, filter and ADSR envelope",
+    "description": "Build sounds from synthesizer modules held in variables: oscillator, filter, ADSR envelope and volume",
     "searchData": [
       "create _ _",
       "set oscillator _ _ to _",
       "set filter _ _ to _",
       "set ADSR _ _ to _",
       "gate _ _",
+      "set volume _ _ to _",
       "set speaker input to _",
       "Preset 1",
       "set preset _ to oscillator _"

@@ -37,21 +37,22 @@
 
     var WAVES = ['saw', 'square', 'triangle', 'sine'],
         NUMERIC = ['frequency', 'pulse width', 'cutoff', 'resonance',
-            'attack', 'decay', 'sustain', 'release', 'amount'],
-        PERCENT = ['pulse width', 'resonance', 'sustain'], // 0 to 100, scaled
+            'attack', 'decay', 'sustain', 'release', 'amount', 'level'],
+        PERCENT = ['pulse width', 'resonance', 'sustain', 'level'], // scaled
         UNITS = {frequency: 'Hz', 'pulse width': '%', cutoff: 'Hz',
             resonance: '%', attack: 's', decay: 's', sustain: '%',
-            release: 's'},
+            release: 's', level: '%'},
         LABELS = {oscillator: 'an oscillator', filter: 'a filter',
-            adsr: 'an ADSR'},
+            adsr: 'an ADSR', volume: 'a volume'},
         SET_SPECS = {                                  // "set" block -> type
             "set oscillator %'module' %'setting' to %'value'": 'oscillator',
             "set filter %'module' %'setting' to %'value'": 'filter',
-            "set ADSR %'module' %'setting' to %'value'": 'adsr'
+            "set ADSR %'module' %'setting' to %'value'": 'adsr',
+            "set volume %'module' %'setting' to %'value'": 'volume'
         };
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js?v=3',
+        workletURL: 'libraries/modular/modular-worklet.js?v=4',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
@@ -89,6 +90,14 @@
                     ['amount', 12]
                 ],
                 jacks: ['gate'], // node input 0
+                outputs: 1
+            },
+            volume: {
+                processor: 'modular-volume',
+                settings: [
+                    ['level', 100]
+                ],
+                jacks: ['input', 'control'], // node input 0, 1
                 outputs: 1
             }
         }

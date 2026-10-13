@@ -9,7 +9,7 @@
     Signal conventions:
       - sound signals swing between -1 and +1
       - pitch and cutoff control signals are in semitones
-      - level control signals are a fraction of full, 0 to 1
+      - level control signals are in percent of full
       - "gate" and "trigger" signals count as on above 0.5
 
     This file runs inside the audio rendering thread. It must not
@@ -191,7 +191,7 @@ class FilterProcessor extends AudioWorkletProcessor {
 // volume
 
 class VolumeProcessor extends AudioWorkletProcessor {
-    // inputs:  0 input  1 level (fraction of full)
+    // inputs:  0 input  1 control (percent added to the level)
     // outputs: 0 output
 
     static get parameterDescriptors() {
@@ -211,7 +211,7 @@ class VolumeProcessor extends AudioWorkletProcessor {
 
         for (i = 0; i < n; i += 1) {
             a = knob;
-            if (cv) {a += cv[i]; }
+            if (cv) {a += cv[i] / 100; }
             if (a < 0) {a = 0; }
             if (a > 1) {a = 1; }
             out[i] = audio ? audio[i] * a : 0;
