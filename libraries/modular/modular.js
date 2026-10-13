@@ -500,6 +500,28 @@
         }
     }
 
+    function shapeFromSetting(valueSlot) {
+        // apply the read-only state the chosen setting calls for,
+        // e.g. on a block that came back from a saved project
+        var settingSlot = siblingSlot(valueSlot, -1),
+            setting = settingSlot ? String(settingSlot.evaluate()) : '';
+        if (setting) {
+            valueSlot.isReadOnly = setting !== 'frequency';
+        }
+    }
+
+    if (!InputSlotMorph.prototype.modularHooked) {
+        InputSlotMorph.prototype.modularHooked = true;
+        InputSlotMorph.prototype.mouseDownLeftBeforeModular =
+            InputSlotMorph.prototype.mouseDownLeft;
+        InputSlotMorph.prototype.mouseDownLeft = function (pos) {
+            if (this.choices === 'ext_syn_values') {
+                shapeFromSetting(this);
+            }
+            return this.mouseDownLeftBeforeModular(pos);
+        };
+    }
+
     SnapExtensions.menus.set(
         'syn_settings',
         function () {
@@ -526,7 +548,7 @@
                 ide = this.parentThatIsA(IDE_Morph),
                 sprite = ide ? ide.currentSprite : Modular.sprite,
                 menu = {};
-            this.isReadOnly = setting !== 'frequency' && setting !== '';
+            shapeFromSetting(this);
             if (setting === 'wave') {
                 WAVES.forEach(wave => {menu[wave] = wave; });
             } else if (setting === 'control' || setting === 'trigger') {
