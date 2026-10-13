@@ -23,6 +23,7 @@
         syn_create(type, name)         makes a global variable holding
                                        a new module
         syn_set(type, module, setting, value)
+        syn_gate(module, state)        opens or closes an ADSR's gate
         syn_speaker(module)
         syn_preset(number, module)     copies a module's settings into
                                        the body of the "Preset <n>" block
@@ -35,13 +36,18 @@
     'use strict';
 
     var WAVES = ['saw', 'square', 'triangle', 'sine'],
-        NUMERIC = ['frequency', 'pulse width', 'cutoff', 'resonance'],
-        PERCENT = ['pulse width', 'resonance'], // typed 0 to 100, scaled
+        NUMERIC = ['frequency', 'pulse width', 'cutoff', 'resonance',
+            'attack', 'decay', 'sustain', 'release', 'amount'],
+        PERCENT = ['pulse width', 'resonance', 'sustain'], // 0 to 100, scaled
         UNITS = {frequency: 'Hz', 'pulse width': '%', cutoff: 'Hz',
-            resonance: '%'},
+            resonance: '%', attack: 's', decay: 's', sustain: '%',
+            release: 's'},
+        LABELS = {oscillator: 'an oscillator', filter: 'a filter',
+            adsr: 'an ADSR'},
         SET_SPECS = {                                  // "set" block -> type
             "set oscillator %'module' %'setting' to %'value'": 'oscillator',
-            "set filter %'module' %'setting' to %'value'": 'filter'
+            "set filter %'module' %'setting' to %'value'": 'filter',
+            "set ADSR %'module' %'setting' to %'value'": 'adsr'
         };
 
     var Modular = {
@@ -71,6 +77,18 @@
                     ['resonance', 100]
                 ],
                 jacks: ['input', 'control'], // node input 0, 1
+                outputs: 1
+            },
+            adsr: {
+                processor: 'modular-envelope',
+                settings: [
+                    ['attack', 0.01],
+                    ['decay', 0.3],
+                    ['sustain', 70],
+                    ['release', 0.5],
+                    ['amount', 12]
+                ],
+                jacks: ['gate'], // node input 0
                 outputs: 1
             }
         }
@@ -329,10 +347,8 @@
             row = this.row(list, key),
             stored, source;
         if (expectedType && this.typeOf(list) !== expectedType) {
-            throw new Error('expecting ' + (expectedType === 'oscillator' ?
-                'an ' : 'a ') + expectedType + ' but getting ' +
-                (expectedType === 'filter' ? 'an ' : 'a ') +
-                this.typeOf(list));
+            throw new Error('expecting ' + LABELS[expectedType] +
+                ' but getting ' + LABELS[this.typeOf(list)]);
         }
         if (!row || key === 'type') {
             throw new Error('a ' + this.typeOf(list) +
@@ -352,6 +368,17 @@
         }
         row.put(stored, 2);
         list.changed();
+    };
+
+    Modular.gate = function (list, open) {
+        // open or close an envelope's gate by hand
+        var rec = this.ensure(list),
+            p = rec.node.parameters.get('gate');
+        if (!p) {
+            throw new Error('expecting an ADSR but getting ' +
+                LABELS[this.typeOf(list)]);
+        }
+        p.setValueAtTime(open ? 1 : 0, this.context().currentTime);
     };
 
     Modular.toSpeaker = function (list) {
@@ -395,7 +422,7 @@
             ide = sprite.parentThatIsA(IDE_Morph),
             id = String(name).trim();
         if (!id) {
-            throw new Error('the ' + type + ' needs a name');
+            throw new Error('the module needs a name');
         }
         if (frame.vars[id] === undefined) {
             frame.addVar(id);
@@ -479,6 +506,16 @@
             Modular.sprite = this;
             if (Modular.waitUntilReady(proc)) {
                 Modular.set(list, setting, value, String(type));
+            }
+        }
+    );
+
+    SnapExtensions.primitives.set(
+        'syn_gate(module, state)',
+        function (list, state, proc) {
+            Modular.sprite = this;
+            if (Modular.waitUntilReady(proc)) {
+                Modular.gate(list, String(state).toLowerCase() === 'open');
             }
         }
     );
