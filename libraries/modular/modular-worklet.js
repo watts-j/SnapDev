@@ -319,9 +319,9 @@ class WobbleProcessor extends AudioWorkletProcessor {
 
     static get parameterDescriptors() {
         return [
-            {name: 'wave', defaultValue: 0, minValue: 0, maxValue: 3,
-                automationRate: 'k-rate'}, // 0 sine 1 triangle 2 saw 3 square
-            {name: 'speed', defaultValue: 2, minValue: 0.01, maxValue: 500,
+            {name: 'wave', defaultValue: 3, minValue: 0, maxValue: 3,
+                automationRate: 'k-rate'}, // 0 saw 1 square 2 triangle 3 sine
+            {name: 'speed', defaultValue: 5, minValue: 0.01, maxValue: 500,
                 automationRate: 'k-rate'}, // Hz
             {name: 'amount', defaultValue: 1, minValue: 0, maxValue: 100,
                 automationRate: 'k-rate'}
@@ -353,17 +353,17 @@ class WobbleProcessor extends AudioWorkletProcessor {
             }
             t = this.phase;
             switch (wave) {
-            case 1:
-                v = t < 0.5 ? 4 * t - 1 : 3 - 4 * t;
-                break;
-            case 2:
-                v = 2 * t - 1;
-                break;
-            case 3:
+            case 1: // square
                 v = t < 0.5 ? 1 : -1;
                 break;
-            default:
+            case 2: // triangle
+                v = t < 0.5 ? 4 * t - 1 : 3 - 4 * t;
+                break;
+            case 3: // sine
                 v = Math.sin(TWO_PI * t);
+                break;
+            default: // saw
+                v = 2 * t - 1;
             }
             out[i] = v * amount;
             this.phase += dt;

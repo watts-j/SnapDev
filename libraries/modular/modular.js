@@ -37,22 +37,24 @@
 
     var WAVES = ['saw', 'square', 'triangle', 'sine'],
         NUMERIC = ['frequency', 'pulse width', 'cutoff', 'resonance',
-            'attack', 'decay', 'sustain', 'release', 'amount', 'level'],
+            'attack', 'decay', 'sustain', 'release', 'amount', 'level',
+            'speed'],
         PERCENT = ['pulse width', 'resonance', 'sustain', 'level'], // scaled
         UNITS = {frequency: 'Hz', 'pulse width': '%', cutoff: 'Hz',
             resonance: '%', attack: 's', decay: 's', sustain: '%',
-            release: 's', level: '%'},
+            release: 's', level: '%', speed: 'Hz'},
         LABELS = {oscillator: 'an oscillator', filter: 'a filter',
-            adsr: 'an ADSR', volume: 'a volume'},
+            adsr: 'an ADSR', volume: 'a volume', lfo: 'an LFO'},
         SET_SPECS = {                                  // "set" block -> type
             "set oscillator %'module' %'setting' to %'value'": 'oscillator',
             "set filter %'module' %'setting' to %'value'": 'filter',
             "set ADSR %'module' %'setting' to %'value'": 'adsr',
-            "set volume %'module' %'setting' to %'value'": 'volume'
+            "set volume %'module' %'setting' to %'value'": 'volume',
+            "set LFO %'module' %'setting' to %'value'": 'lfo'
         };
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js?v=4',
+        workletURL: 'libraries/modular/modular-worklet.js?v=5',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
@@ -98,6 +100,16 @@
                     ['level', 100]
                 ],
                 jacks: ['input', 'control'], // node input 0, 1
+                outputs: 1
+            },
+            lfo: {
+                processor: 'modular-wobble',
+                settings: [
+                    ['wave', 'sine'],
+                    ['speed', 5],
+                    ['amount', 1]
+                ],
+                jacks: ['trigger'], // node input 0
                 outputs: 1
             }
         }
@@ -576,7 +588,7 @@
         applyShape(valueSlot, setting);
         if (setting === 'wave') {
             if (WAVES.indexOf(String(current)) < 0) {
-                valueSlot.setContents('saw');
+                valueSlot.setContents(def ? def[1] : 'saw');
             }
         } else if (NUMERIC.indexOf(setting) > -1) {
             if (current === '' || isNaN(+current)) {
