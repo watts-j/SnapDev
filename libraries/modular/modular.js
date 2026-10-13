@@ -28,12 +28,13 @@
 */
 
 /*global SnapExtensions, Note, List, AudioWorkletNode, StageMorph,
-  IDE_Morph, Context, BlockMorph, InputSlotMorph*/
+  IDE_Morph, Context, BlockMorph, InputSlotMorph, CustomCommandBlockMorph*/
 
 (function () {
     'use strict';
 
-    var WAVES = ['saw', 'square', 'triangle', 'sine'];
+    var WAVES = ['saw', 'square', 'triangle', 'sine'],
+        SET_SPEC = "set oscillator %'module' %'setting' to %'value'";
 
     var Modular = {
         workletURL: 'libraries/modular/modular-worklet.js',
@@ -477,9 +478,8 @@
         // make the value slot read-only or editable to suit the setting
         // and replace contents that no longer fit
         var current = valueSlot.evaluate(),
-            block = valueSlot.parentThatIsA(BlockMorph),
-            readOnly = setting !== 'frequency';
-        valueSlot.isReadOnly = readOnly;
+            block = valueSlot.parentThatIsA(BlockMorph);
+        applyShape(valueSlot, setting);
         if (setting === 'wave') {
             if (WAVES.indexOf(String(current)) < 0) {
                 valueSlot.setContents('saw');
@@ -500,22 +500,54 @@
         }
     }
 
+    function applyShape(valueSlot, setting) {
+        // frequency: a typed number without a dropdown;
+        // anything else: a read-only dropdown.
+        // answer true if the shape changed
+        var before = String(valueSlot.choices) + valueSlot.isReadOnly;
+        valueSlot.isModularValue = true;
+        if (setting === 'frequency') {
+            valueSlot.isReadOnly = false;
+            valueSlot.choices = null;
+            valueSlot.arrow().setSize(0); // so clicks reach the text
+        } else if (setting) {
+            valueSlot.isReadOnly = true;
+            valueSlot.choices = 'ext_syn_values';
+        }
+        return String(valueSlot.choices) + valueSlot.isReadOnly !== before;
+    }
+
     function shapeFromSetting(valueSlot) {
-        // apply the read-only state the chosen setting calls for,
-        // e.g. on a block that came back from a saved project
-        var settingSlot = siblingSlot(valueSlot, -1),
-            setting = settingSlot ? String(settingSlot.evaluate()) : '';
-        if (setting) {
-            valueSlot.isReadOnly = setting !== 'frequency';
+        // apply the shape the chosen setting calls for, e.g. on a
+        // block that came back from a saved project
+        var settingSlot = siblingSlot(valueSlot, -1);
+        if (settingSlot) {
+            applyShape(valueSlot, String(settingSlot.evaluate()));
         }
     }
 
     if (!InputSlotMorph.prototype.modularHooked) {
         InputSlotMorph.prototype.modularHooked = true;
+        // whenever a "set oscillator" block lays itself out, e.g. when a
+        // project loads, its value slot takes the shape its setting needs
+        CustomCommandBlockMorph.prototype.fixLayoutBeforeModular =
+            CustomCommandBlockMorph.prototype.fixLayout;
+        CustomCommandBlockMorph.prototype.fixLayout = function () {
+            var inputs;
+            if (this.definition && this.definition.spec === SET_SPEC) {
+                inputs = this.inputs();
+                if (inputs[1] instanceof InputSlotMorph &&
+                        inputs[2] instanceof InputSlotMorph &&
+                        applyShape(inputs[2], String(inputs[1].evaluate()))) {
+                    inputs[2].fixLayout();
+                }
+            }
+            return this.fixLayoutBeforeModular();
+        };
         InputSlotMorph.prototype.mouseDownLeftBeforeModular =
             InputSlotMorph.prototype.mouseDownLeft;
         InputSlotMorph.prototype.mouseDownLeft = function (pos) {
-            if (this.choices === 'ext_syn_values') {
+            if (this.choices === 'ext_syn_values' || this.isModularValue) {
                 shapeFromSetting(this);
             }
             return this.mouseDownLeftBeforeModular(pos);
@@ -530,6 +562,7 @@
             ['wave', 'frequency', 'control', 'trigger'].forEach(key => {
                 menu[key] = function () {
                     var valueSlot = siblingSlot(slot, 1);
+                    slot.setContents(key);
                     if (valueSlot) {
                         shapeValueSlot(valueSlot, key);
                     }
