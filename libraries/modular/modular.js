@@ -45,7 +45,7 @@
         };
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js',
+        workletURL: 'libraries/modular/modular-worklet.js?v=3',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
