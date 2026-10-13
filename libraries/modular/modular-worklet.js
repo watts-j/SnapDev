@@ -59,7 +59,7 @@ class OscillatorProcessor extends AudioWorkletProcessor {
         return [
             {name: 'wave', defaultValue: 0, minValue: 0, maxValue: 3,
                 automationRate: 'k-rate'}, // 0 saw 1 square 2 triangle 3 sine
-            {name: 'frequency', defaultValue: 261.6255653005986,
+            {name: 'frequency', defaultValue: 440,
                 minValue: 0.01, maxValue: 20000, automationRate: 'k-rate'},
             {name: 'pulse width', defaultValue: 0.5, minValue: 0,
                 maxValue: 1, automationRate: 'k-rate'}
@@ -139,7 +139,7 @@ class FilterProcessor extends AudioWorkletProcessor {
         return [
             {name: 'cutoff', defaultValue: 1000, minValue: 10,
                 maxValue: 20000, automationRate: 'k-rate'}, // Hz
-            {name: 'resonance', defaultValue: 0, minValue: 0, maxValue: 1,
+            {name: 'resonance', defaultValue: 1, minValue: 0, maxValue: 1,
                 automationRate: 'k-rate'}
         ];
     }

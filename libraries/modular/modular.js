@@ -7,9 +7,10 @@
     user, for example:
 
         type       oscillator
-        wave       saw
-        frequency  261.6
-        control    (empty, or another module's list)
+        wave         saw
+        frequency    440
+        pulse width  50
+        control      (empty, or another module's list)
         trigger    (empty, or another module's list)
 
     Each settings list is linked, through a hidden table, to a live
@@ -34,9 +35,10 @@
     'use strict';
 
     var WAVES = ['saw', 'square', 'triangle', 'sine'],
-        NUMERIC = ['frequency', 'cutoff', 'resonance'], // typed settings
-        PERCENT = ['resonance'],  // typed 0 to 100, scaled to 0 to 1 inside
-        UNITS = {frequency: 'Hz', cutoff: 'Hz', resonance: '%'},
+        NUMERIC = ['frequency', 'pulse width', 'cutoff', 'resonance'],
+        PERCENT = ['pulse width', 'resonance'], // typed 0 to 100, scaled
+        UNITS = {frequency: 'Hz', 'pulse width': '%', cutoff: 'Hz',
+            resonance: '%'},
         SET_SPECS = {                                  // "set" block -> type
             "set oscillator %'module' %'setting' to %'value'": 'oscillator',
             "set filter %'module' %'setting' to %'value'": 'filter'
@@ -56,7 +58,8 @@
                 processor: 'modular-oscillator',
                 settings: [
                     ['wave', 'saw'],
-                    ['frequency', 261.6]
+                    ['frequency', 440],
+                    ['pulse width', 50]
                 ],
                 jacks: ['control', 'trigger'], // node input 0, 1
                 outputs: 1
@@ -65,7 +68,7 @@
                 processor: 'modular-filter',
                 settings: [
                     ['cutoff', 1000],
-                    ['resonance', 0]
+                    ['resonance', 100]
                 ],
                 jacks: ['input', 'control'], // node input 0, 1
                 outputs: 1
@@ -299,7 +302,8 @@
             );
         }
         if (PERCENT.indexOf(key) > -1) {
-            v = Math.max(0, Math.min(100, v));
+            v = Math.max(key === 'pulse width' ? 1 : 0,
+                Math.min(key === 'pulse width' ? 99 : 100, v));
             p.cancelScheduledValues(ctx.currentTime);
             p.setTargetAtTime(v / 100, ctx.currentTime, 0.005);
             return v;
