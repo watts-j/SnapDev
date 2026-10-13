@@ -35,7 +35,7 @@
 
     var WAVES = ['saw', 'square', 'triangle', 'sine'],
         NUMERIC = ['frequency', 'cutoff', 'resonance'], // typed settings
-        UNITS = {frequency: 'Hz'},                     // label after the value
+        UNITS = {frequency: 'Hz', cutoff: 'Hz'},       // label after the value
         SET_SPECS = {                                  // "set" block -> type
             "set oscillator %'module' %'setting' to %'value'": 'oscillator',
             "set filter %'module' %'setting' to %'value'": 'filter'
