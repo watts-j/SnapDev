@@ -28,7 +28,7 @@
 */
 
 /*global SnapExtensions, Note, List, AudioWorkletNode, StageMorph,
-  IDE_Morph, Context*/
+  IDE_Morph, Context, BlockMorph, InputSlotMorph*/
 
 (function () {
     'use strict';
@@ -42,6 +42,7 @@
         nodes: new WeakMap(), // settings list -> record {node, cables}
         speaker: null,      // master GainNode
         speakerSource: null, // record currently plugged into the speaker
+        sprite: null,       // the sprite or stage running the current block
 
         types: {
             oscillator: {
@@ -164,6 +165,38 @@
         return new List(rows);
     };
 
+    Modular.resolve = function (value, jack) {
+        // answer the module table a jack value stands for: the table
+        // itself, or the global variable of that name, or '' for none
+        var frame, found;
+        if (value instanceof List) {
+            if (!this.isModule(value)) {
+                throw new Error('expecting a module in "' + jack + '"');
+            }
+            return value;
+        }
+        if (value === '' || value === null || value === undefined) {
+            return '';
+        }
+        frame = this.sprite ? this.sprite.globalVariables() : null;
+        found = frame && frame.vars[String(value)] ?
+            frame.vars[String(value)].value : undefined;
+        if (!(found instanceof List) || !this.isModule(found)) {
+            throw new Error('there is no module named "' + value +
+                '" to plug into "' + jack + '"');
+        }
+        return found;
+    };
+
+    Modular.moduleNames = function (sprite) {
+        // answer the names of global variables holding modules
+        var frame = sprite.globalVariables();
+        return Object.keys(frame.vars).filter(name =>
+            frame.vars[name].value instanceof List &&
+                this.isModule(frame.vars[name].value)
+        );
+    };
+
     // live nodes
 
     Modular.ensure = function (list, visiting) {
@@ -195,7 +228,7 @@
         });
         spec.jacks.forEach(jack => {
             var row = this.row(list, jack),
-                source = row ? row.at(2) : '';
+                source = this.resolve(row ? row.at(2) : '', jack);
             if (source instanceof List) {
                 this.plug(list, rec, jack, source, visiting);
             }
@@ -210,9 +243,6 @@
             srcRec;
         this.unplug(rec, jack, idx);
         if (source instanceof List) {
-            if (!this.isModule(source)) {
-                throw new Error('expecting a module in "' + jack + '"');
-            }
             srcRec = this.ensure(source, visiting);
             srcRec.node.connect(rec.node, 0, idx);
             rec.cables[jack] = srcRec;
@@ -271,22 +301,19 @@
             key = String(setting),
             rec = this.ensure(list),
             row = this.row(list, key),
-            stored;
+            stored, source;
         if (!row || key === 'type') {
             throw new Error('a ' + this.typeOf(list) +
                 ' has no setting named "' + key + '"');
         }
         if (spec.jacks.indexOf(key) > -1) {
-            if (value instanceof List) {
-                this.plug(list, rec, key, value);
-                stored = value;
-            } else if (value === '' || value === null ||
-                    value === undefined) {
+            source = this.resolve(value, key);
+            if (source instanceof List) {
+                this.plug(list, rec, key, source);
+                stored = value instanceof List ? value : String(value);
+            } else {
                 this.unplug(rec, key, spec.jacks.indexOf(key));
                 stored = '';
-            } else {
-                throw new Error('expecting a module or nothing in "' +
-                    key + '" but getting "' + value + '"');
             }
         } else {
             stored = this.applySetting(list, rec, key, value);
@@ -396,6 +423,7 @@
         'syn_create(type, name)',
         function (type, name, proc) {
             var key = String(type).toLowerCase();
+            Modular.sprite = this;
             if (!Modular.types[key]) {
                 throw new Error('unknown module type "' + type + '"');
             }
@@ -408,6 +436,7 @@
     SnapExtensions.primitives.set(
         'syn_preset(number, module)',
         function (number, list) {
+            Modular.sprite = this;
             Modular.savePreset(this, number, list);
         }
     );
@@ -415,6 +444,7 @@
     SnapExtensions.primitives.set(
         'syn_set(module, setting, value)',
         function (list, setting, value, proc) {
+            Modular.sprite = this;
             if (Modular.waitUntilReady(proc)) {
                 Modular.set(list, setting, value);
             }
@@ -424,9 +454,89 @@
     SnapExtensions.primitives.set(
         'syn_speaker(module)',
         function (list, proc) {
+            Modular.sprite = this;
             if (Modular.waitUntilReady(proc)) {
                 Modular.toSpeaker(list);
             }
+        }
+    );
+
+    // menus for the "set oscillator" block
+    // the value slot follows the chosen setting: a read-only list of
+    // waves, a read-only list of modules, or a typed number
+
+    function siblingSlot(slot, offset) {
+        var block = slot.parentThatIsA(BlockMorph),
+            inputs = block ? block.inputs() : [],
+            idx = inputs.indexOf(slot),
+            other = idx > -1 ? inputs[idx + offset] : null;
+        return other instanceof InputSlotMorph ? other : null;
+    }
+
+    function shapeValueSlot(valueSlot, setting) {
+        // make the value slot read-only or editable to suit the setting
+        // and replace contents that no longer fit
+        var current = valueSlot.evaluate(),
+            block = valueSlot.parentThatIsA(BlockMorph),
+            readOnly = setting !== 'frequency';
+        valueSlot.isReadOnly = readOnly;
+        if (setting === 'wave') {
+            if (WAVES.indexOf(String(current)) < 0) {
+                valueSlot.setContents('saw');
+            }
+        } else if (setting === 'frequency') {
+            if (current === '' || isNaN(+current)) {
+                valueSlot.setContents(261.6);
+            }
+        } else if (WAVES.indexOf(String(current)) > -1 ||
+                !isNaN(+current)) {
+            valueSlot.setContents('');
+        }
+        valueSlot.fixLayout();
+        valueSlot.rerender();
+        if (block) {
+            block.fixLayout();
+            block.changed();
+        }
+    }
+
+    SnapExtensions.menus.set(
+        'syn_settings',
+        function () {
+            var slot = this,
+                menu = {};
+            ['wave', 'frequency', 'control', 'trigger'].forEach(key => {
+                menu[key] = function () {
+                    var valueSlot = siblingSlot(slot, 1);
+                    if (valueSlot) {
+                        shapeValueSlot(valueSlot, key);
+                    }
+                    return key;
+                };
+            });
+            return menu;
+        }
+    );
+
+    SnapExtensions.menus.set(
+        'syn_values',
+        function () {
+            var settingSlot = siblingSlot(this, -1),
+                setting = settingSlot ? String(settingSlot.evaluate()) : '',
+                ide = this.parentThatIsA(IDE_Morph),
+                sprite = ide ? ide.currentSprite : Modular.sprite,
+                menu = {};
+            this.isReadOnly = setting !== 'frequency' && setting !== '';
+            if (setting === 'wave') {
+                WAVES.forEach(wave => {menu[wave] = wave; });
+            } else if (setting === 'control' || setting === 'trigger') {
+                if (sprite) {
+                    Modular.moduleNames(sprite).forEach(name => {
+                        menu[name] = name;
+                    });
+                }
+            }
+            return menu;
         }
     );
 
