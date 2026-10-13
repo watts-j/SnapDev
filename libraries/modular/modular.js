@@ -35,7 +35,8 @@
 
     var WAVES = ['saw', 'square', 'triangle', 'sine'],
         NUMERIC = ['frequency', 'cutoff', 'resonance'], // typed settings
-        UNITS = {frequency: 'Hz', cutoff: 'Hz'},       // label after the value
+        PERCENT = ['resonance'],  // typed 0 to 100, scaled to 0 to 1 inside
+        UNITS = {frequency: 'Hz', cutoff: 'Hz', resonance: '%'},
         SET_SPECS = {                                  // "set" block -> type
             "set oscillator %'module' %'setting' to %'value'": 'oscillator',
             "set filter %'module' %'setting' to %'value'": 'filter'
@@ -296,6 +297,12 @@
             throw new Error(
                 'expecting a number but getting "' + value + '"'
             );
+        }
+        if (PERCENT.indexOf(key) > -1) {
+            v = Math.max(0, Math.min(100, v));
+            p.cancelScheduledValues(ctx.currentTime);
+            p.setTargetAtTime(v / 100, ctx.currentTime, 0.005);
+            return v;
         }
         v = Math.max(p.minValue, Math.min(p.maxValue, v));
         p.cancelScheduledValues(ctx.currentTime);
