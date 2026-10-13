@@ -3,71 +3,51 @@
 
     Snap! extension primitives for the "Modular Synth" library.
 
-    Modules are AudioWorklet nodes (see modular-worklet.js). Their
-    jacks are node inputs / outputs, their knobs are AudioParams.
-    Scripts only create modules, turn knobs and patch cables; every
-    signal, including control signals, stays inside Web Audio.
+    A module is a Snap! list of settings, held in a variable by the
+    user, for example:
+
+        type       oscillator
+        wave       saw
+        frequency  261.6
+        control    (empty, or another module's list)
+        trigger    (empty, or another module's list)
+
+    Each settings list is linked, through a hidden table, to a live
+    AudioWorklet node (see modular-worklet.js). Cables are the module
+    lists stored in another module's jack rows. When a list has no
+    node, for instance after a project has been loaded, the node is
+    rebuilt from the settings the next time a block touches the list.
 
     primitives (prefix "syn_"):
-        syn_create(type, name)
-        syn_delete(name)
-        syn_clear()
-        syn_connect(module, output, module, input)
-        syn_disconnect(module, input)
-        syn_set(module, knob, value)
-        syn_get(module, knob)
-        syn_gate(module, bool)
-        syn_modules()
-
-    menus (prefix "syn_"):
-        syn_names, syn_outputs, syn_inputs, syn_knobs
+        syn_new(type)                  -> settings list
+        syn_set(module, setting, value)
+        syn_speaker(module)
 */
 
-/*global SnapExtensions, Note, List, AudioWorkletNode, BlockMorph*/
+/*global SnapExtensions, Note, List, AudioWorkletNode, StageMorph*/
 
 (function () {
     'use strict';
 
-    var WAVES = ['sine', 'triangle', 'saw', 'square'];
+    var WAVES = ['saw', 'square', 'triangle', 'sine'];
 
     var Modular = {
         workletURL: 'libraries/modular/modular-worklet.js',
         loading: null,      // Promise while the worklet loads
         ready: false,
-        modules: new Map(), // name -> module record
-        connections: [],    // {src, out, dst, in} records
+        nodes: new WeakMap(), // settings list -> record {node, cables}
         speaker: null,      // master GainNode
+        speakerSource: null, // record currently plugged into the speaker
 
         types: {
             oscillator: {
                 processor: 'modular-oscillator',
-                inputs: ['pitch', 'trigger'],
-                outputs: ['saw', 'square', 'triangle', 'sine'],
-                knobs: ['octave', 'tune', 'pulse width']
-            },
-            filter: {
-                processor: 'modular-filter',
-                inputs: ['input', 'cutoff'],
-                outputs: ['output'],
-                knobs: ['cutoff', 'resonance']
-            },
-            volume: {
-                processor: 'modular-volume',
-                inputs: ['input', 'level'],
-                outputs: ['output'],
-                knobs: ['level']
-            },
-            envelope: {
-                processor: 'modular-envelope',
-                inputs: ['gate'],
-                outputs: ['output'],
-                knobs: ['attack', 'decay', 'sustain', 'release', 'amount']
-            },
-            wobble: {
-                processor: 'modular-wobble',
-                inputs: ['trigger'],
-                outputs: ['output'],
-                knobs: ['wave', 'speed', 'amount']
+                settings: [
+                    ['wave', 'saw'],
+                    ['frequency', 261.6]
+                ],
+                jacks: ['control', 'trigger'], // node input 0, 1
+                outputs: 1
             }
         }
     };
@@ -104,16 +84,8 @@
         var ctx = this.context();
         if (!this.speaker) {
             this.speaker = ctx.createGain();
-            this.speaker.gain.value = 0.5; // volume 1 leaves mixing headroom
+            this.speaker.gain.value = 0.5;
             this.speaker.connect(ctx.destination);
-            this.modules.set('speaker', {
-                name: 'speaker',
-                type: 'speaker',
-                node: this.speaker,
-                inputs: ['input'],
-                outputs: [],
-                knobs: ['volume']
-            });
         }
     };
 
@@ -139,303 +111,249 @@
         return false;
     };
 
-    // registry helpers
+    // settings lists
 
-    Modular.module = function (name) {
-        var rec = this.modules.get(String(name));
-        if (!rec) {
-            throw new Error('there is no module named "' + name + '"');
+    Modular.rows = function (list) {
+        // answer the settings rows of a module list as [key, row] pairs
+        if (!(list instanceof List)) {
+            return null;
         }
-        return rec;
+        return list.itemsArray().filter(row =>
+            row instanceof List && row.length() === 2
+        ).map(row => [String(row.at(1)), row]);
     };
 
-    Modular.jackIndex = function (rec, kind, jack) {
-        var idx = rec[kind].indexOf(String(jack));
-        if (idx < 0) {
-            throw new Error(
-                'module "' + rec.name + '" has no ' +
-                (kind === 'inputs' ? 'input' : 'output') +
-                ' named "' + jack + '"'
-            );
-        }
-        return idx;
+    Modular.row = function (list, key) {
+        var rows = this.rows(list) || [],
+            found = rows.find(pair => pair[0] === key);
+        return found ? found[1] : null;
     };
 
-    Modular.knob = function (rec, name) {
-        var key = String(name);
-        if (rec.type === 'speaker') {
-            if (key === 'volume') {
-                return rec.node.gain;
-            }
-        } else if (rec.knobs.indexOf(key) > -1) {
-            return rec.node.parameters.get(key);
-        }
-        throw new Error(
-            'module "' + rec.name + '" has no knob named "' + name + '"'
-        );
+    Modular.typeOf = function (list) {
+        var row = this.row(list, 'type');
+        return row ? String(row.at(2)) : null;
     };
 
-    Modular.create = function (type, name) {
-        var key = String(type).toLowerCase(),
-            spec = this.types[key],
-            id = String(name),
-            node, rec;
-        if (!spec) {
-            throw new Error('unknown module type "' + type + '"');
+    Modular.isModule = function (list) {
+        var type = this.typeOf(list);
+        return type !== null && this.types.hasOwnProperty(type);
+    };
+
+    Modular.spec = function (list) {
+        var type = this.typeOf(list);
+        if (!type || !this.types[type]) {
+            throw new Error('expecting a module but getting "' +
+                (list instanceof List ? 'a list' : list) + '"');
         }
-        if (!id || id === 'speaker') {
-            throw new Error('"' + id + '" is not a valid module name');
+        return this.types[type];
+    };
+
+    Modular.newList = function (type) {
+        var spec = this.types[type],
+            rows = [new List(['type', type])];
+        spec.settings.forEach(pair => {
+            rows.push(new List([pair[0], pair[1]]));
+        });
+        spec.jacks.forEach(jack => {
+            rows.push(new List([jack, '']));
+        });
+        return new List(rows);
+    };
+
+    // live nodes
+
+    Modular.ensure = function (list, visiting) {
+        // answer the record for a module list, building its node from
+        // the settings if it has none
+        var spec = this.spec(list),
+            rec = this.nodes.get(list),
+            node;
+        if (rec) {
+            return rec;
         }
-        if (this.modules.has(id)) {
-            this.remove(id);
+        visiting = visiting || new Set();
+        if (visiting.has(list)) {
+            throw new Error('modules are plugged into each other in a loop');
         }
+        visiting.add(list);
         node = new AudioWorkletNode(this.context(), spec.processor, {
-            numberOfInputs: spec.inputs.length,
-            numberOfOutputs: spec.outputs.length,
-            outputChannelCount: spec.outputs.map(() => 1)
+            numberOfInputs: spec.jacks.length,
+            numberOfOutputs: spec.outputs,
+            outputChannelCount: [1]
         });
-        rec = {
-            name: id,
-            type: key,
-            node: node,
-            inputs: spec.inputs,
-            outputs: spec.outputs,
-            knobs: spec.knobs
-        };
-        this.modules.set(id, rec);
+        rec = {node: node, cables: {}};
+        this.nodes.set(list, rec);
+        spec.settings.forEach(pair => {
+            var row = this.row(list, pair[0]);
+            if (row) {
+                this.applySetting(list, rec, pair[0], row.at(2));
+            }
+        });
+        spec.jacks.forEach(jack => {
+            var row = this.row(list, jack),
+                source = row ? row.at(2) : '';
+            if (source instanceof List) {
+                this.plug(list, rec, jack, source, visiting);
+            }
+        });
         return rec;
     };
 
-    Modular.remove = function (name) {
-        var rec = this.module(name);
-        if (rec.type === 'speaker') {
-            throw new Error('the speaker cannot be deleted');
-        }
-        this.connections = this.connections.filter(c => {
-            if (c.src === rec || c.dst === rec) {
-                this.unplug(c);
-                return false;
+    Modular.plug = function (list, rec, jack, source, visiting) {
+        // connect the source module's output into this module's jack
+        var spec = this.spec(list),
+            idx = spec.jacks.indexOf(jack),
+            srcRec;
+        this.unplug(rec, jack, idx);
+        if (source instanceof List) {
+            if (!this.isModule(source)) {
+                throw new Error('expecting a module in "' + jack + '"');
             }
-            return true;
-        });
-        this.modules.delete(rec.name);
+            srcRec = this.ensure(source, visiting);
+            srcRec.node.connect(rec.node, 0, idx);
+            rec.cables[jack] = srcRec;
+        }
     };
 
-    Modular.clear = function () {
-        Array.from(this.modules.keys()).forEach(name => {
-            if (name !== 'speaker') {
-                this.remove(name);
+    Modular.unplug = function (rec, jack, idx) {
+        var old = rec.cables[jack];
+        if (old) {
+            try {
+                old.node.disconnect(rec.node, 0, idx);
+            } catch (ignored) {
+                // already disconnected
             }
-        });
-    };
-
-    Modular.unplug = function (c) {
-        if (c.dst.type === 'speaker') {
-            c.src.node.disconnect(c.dst.node, c.out);
-        } else {
-            c.src.node.disconnect(c.dst.node, c.out, c.in);
+            delete rec.cables[jack];
         }
     };
 
-    Modular.connect = function (srcName, output, dstName, input) {
-        var src = this.module(srcName),
-            dst = this.module(dstName),
-            out = this.jackIndex(src, 'outputs', output),
-            inp = this.jackIndex(dst, 'inputs', input),
-            exists = this.connections.some(c =>
-                c.src === src && c.out === out && c.dst === dst && c.in === inp
-            );
-        if (exists) {
-            return;
-        }
-        if (dst.type === 'speaker') {
-            src.node.connect(dst.node, out);
-        } else {
-            src.node.connect(dst.node, out, inp);
-        }
-        this.connections.push({src: src, out: out, dst: dst, in: inp});
-    };
-
-    Modular.disconnect = function (dstName, input) {
-        var dst = this.module(dstName),
-            inp = this.jackIndex(dst, 'inputs', input);
-        this.connections = this.connections.filter(c => {
-            if (c.dst === dst && c.in === inp) {
-                this.unplug(c);
-                return false;
-            }
-            return true;
-        });
-    };
-
-    Modular.set = function (name, knob, value) {
-        var rec = this.module(name),
-            p = this.knob(rec, knob),
-            v, ctx = this.context();
-        if (String(knob) === 'wave') {
+    Modular.applySetting = function (list, rec, key, value) {
+        var p = rec.node.parameters.get(key === 'wave' ? 'wave' : key),
+            ctx = this.context(),
+            v;
+        if (key === 'wave') {
             v = WAVES.indexOf(String(value).toLowerCase());
             if (v < 0) {
-                v = +value - 1; // also accept 1 .. 4
-            }
-            if (isNaN(v) || v < 0 || v > 3) {
                 throw new Error(
                     'expecting one of ' + WAVES.join(', ') +
                     ' but getting "' + value + '"'
                 );
             }
-        } else {
-            v = +value;
-            if (isNaN(v)) {
-                throw new Error(
-                    'expecting a number but getting "' + value + '"'
-                );
-            }
+            p.setValueAtTime(v, ctx.currentTime);
+            return WAVES[v];
         }
-        if (rec.type === 'speaker') {
-            v = Math.max(0, Math.min(1, v)) * 0.5;
-        } else {
-            v = Math.max(p.minValue, Math.min(p.maxValue, v));
+        v = +value;
+        if (isNaN(v)) {
+            throw new Error(
+                'expecting a number but getting "' + value + '"'
+            );
         }
+        v = Math.max(p.minValue, Math.min(p.maxValue, v));
         p.cancelScheduledValues(ctx.currentTime);
         p.setTargetAtTime(v, ctx.currentTime, 0.005);
+        return v;
     };
 
-    Modular.get = function (name, knob) {
-        var rec = this.module(name),
-            p = this.knob(rec, knob),
-            v = p.value;
-        if (String(knob) === 'wave') {
-            return WAVES[Math.round(v)];
-        }
-        if (rec.type === 'speaker') {
-            v *= 2;
-        }
-        // AudioParams hold single-precision floats, round them for display
-        return Math.round(v * 1e6) / 1e6;
+    // operations
+
+    Modular.create = function (type) {
+        var list = this.newList(type);
+        this.ensure(list);
+        return list;
     };
 
-    Modular.gate = function (name, open) {
-        var rec = this.module(name),
-            p = rec.node.parameters ?
-                rec.node.parameters.get('gate') : null;
-        if (!p) {
-            throw new Error('module "' + rec.name + '" has no gate');
+    Modular.set = function (list, setting, value) {
+        var spec = this.spec(list),
+            key = String(setting),
+            rec = this.ensure(list),
+            row = this.row(list, key),
+            stored;
+        if (!row || key === 'type') {
+            throw new Error('a ' + this.typeOf(list) +
+                ' has no setting named "' + key + '"');
         }
-        p.setValueAtTime(open ? 1 : 0, this.context().currentTime);
+        if (spec.jacks.indexOf(key) > -1) {
+            if (value instanceof List) {
+                this.plug(list, rec, key, value);
+                stored = value;
+            } else if (value === '' || value === null ||
+                    value === undefined) {
+                this.unplug(rec, key, spec.jacks.indexOf(key));
+                stored = '';
+            } else {
+                throw new Error('expecting a module or nothing in "' +
+                    key + '" but getting "' + value + '"');
+            }
+        } else {
+            stored = this.applySetting(list, rec, key, value);
+        }
+        row.put(stored, 2);
+        list.changed();
     };
+
+    Modular.toSpeaker = function (list) {
+        var rec;
+        this.ensureSpeaker();
+        if (this.speakerSource) {
+            try {
+                this.speakerSource.node.disconnect(this.speaker);
+            } catch (ignored) {
+                // already disconnected
+            }
+            this.speakerSource = null;
+        }
+        if (list === '' || list === null || list === undefined) {
+            return;
+        }
+        rec = this.ensure(list);
+        rec.node.connect(this.speaker);
+        this.speakerSource = rec;
+    };
+
+    // the stop sign silences the speaker
+
+    if (!StageMorph.prototype.modularStopHooked) {
+        StageMorph.prototype.modularStopHooked = true;
+        StageMorph.prototype.stopAllActiveSoundsBeforeModular =
+            StageMorph.prototype.stopAllActiveSounds;
+        StageMorph.prototype.stopAllActiveSounds = function () {
+            this.stopAllActiveSoundsBeforeModular();
+            if (SnapExtensions.Modular) {
+                SnapExtensions.Modular.toSpeaker('');
+            }
+        };
+    }
 
     // primitives
 
     SnapExtensions.primitives.set(
-        'syn_create(type, name)',
-        function (type, name, proc) {
+        'syn_new(type)',
+        function (type, proc) {
+            var key = String(type).toLowerCase();
+            if (!Modular.types[key]) {
+                throw new Error('unknown module type "' + type + '"');
+            }
             if (Modular.waitUntilReady(proc)) {
-                Modular.create(type, name);
+                return Modular.create(key);
             }
         }
     );
 
     SnapExtensions.primitives.set(
-        'syn_delete(name)',
-        function (name) {
-            Modular.remove(name);
+        'syn_set(module, setting, value)',
+        function (list, setting, value, proc) {
+            if (Modular.waitUntilReady(proc)) {
+                Modular.set(list, setting, value);
+            }
         }
     );
 
     SnapExtensions.primitives.set(
-        'syn_clear()',
-        function () {
-            Modular.clear();
-        }
-    );
-
-    SnapExtensions.primitives.set(
-        'syn_connect(module, output, module, input)',
-        function (src, output, dst, input) {
-            Modular.connect(src, output, dst, input);
-        }
-    );
-
-    SnapExtensions.primitives.set(
-        'syn_disconnect(module, input)',
-        function (dst, input) {
-            Modular.disconnect(dst, input);
-        }
-    );
-
-    SnapExtensions.primitives.set(
-        'syn_set(module, knob, value)',
-        function (name, knob, value) {
-            Modular.set(name, knob, value);
-        }
-    );
-
-    SnapExtensions.primitives.set(
-        'syn_get(module, knob)',
-        function (name, knob) {
-            return Modular.get(name, knob);
-        }
-    );
-
-    SnapExtensions.primitives.set(
-        'syn_gate(module, bool)',
-        function (name, open) {
-            Modular.gate(name, open === true);
-        }
-    );
-
-    SnapExtensions.primitives.set(
-        'syn_modules()',
-        function () {
-            return new List(Array.from(Modular.modules.keys()));
-        }
-    );
-
-    // menus
-
-    function dict(names) {
-        var result = {};
-        names.forEach(name => {result[name] = name; });
-        return result;
-    }
-
-    function moduleBefore(slot) {
-        // answer the module record named in the slot preceding this one
-        var block = slot.parentThatIsA(BlockMorph),
-            inputs = block.inputs(),
-            idx = inputs.indexOf(slot),
-            name = idx > 0 ? inputs[idx - 1].evaluate() : null;
-        return name ? Modular.modules.get(String(name)) : null;
-    }
-
-    SnapExtensions.menus.set(
-        'syn_names',
-        function () {
-            return dict(Array.from(Modular.modules.keys()));
-        }
-    );
-
-    SnapExtensions.menus.set(
-        'syn_outputs',
-        function () {
-            var rec = moduleBefore(this);
-            return dict(rec ? rec.outputs : []);
-        }
-    );
-
-    SnapExtensions.menus.set(
-        'syn_inputs',
-        function () {
-            var rec = moduleBefore(this);
-            return dict(rec ? rec.inputs : []);
-        }
-    );
-
-    SnapExtensions.menus.set(
-        'syn_knobs',
-        function () {
-            var rec = moduleBefore(this);
-            return dict(rec ? rec.knobs : []);
+        'syn_speaker(module)',
+        function (list, proc) {
+            if (Modular.waitUntilReady(proc)) {
+                Modular.toSpeaker(list);
+            }
         }
     );
 

@@ -2806,18 +2806,11 @@
   {
     "fileName": "modular.xml",
     "name": "Modular Synth",
-    "description": "Build sounds by patching together simple synthesizer modules: oscillator, filter, volume, envelope and wobble",
+    "description": "Build sounds from synthesizer modules held in variables, starting with an oscillator",
     "searchData": [
-      "create _ module named _",
-      "delete module _",
-      "delete all modules",
-      "connect _ _ to _ _",
-      "disconnect _ _",
-      "set _ _ to _",
-      "_ _",
-      "gate _ _",
-      "modules",
-      "note _ as pitch"
+      "new oscillator (VCO)",
+      "set oscillator _ _ to _",
+      "set speaker input to _"
     ],
     "categories": [
       "Modular"

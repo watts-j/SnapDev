@@ -52,15 +52,15 @@ function polyBlep(t, dt) {
 // oscillator
 
 class OscillatorProcessor extends AudioWorkletProcessor {
-    // inputs:  0 pitch (semitones)  1 trigger
-    // outputs: 0 saw  1 square  2 triangle  3 sine
+    // inputs:  0 control (semitones added to the frequency)  1 trigger
+    // outputs: 0 the chosen wave
 
     static get parameterDescriptors() {
         return [
-            {name: 'octave', defaultValue: 0, minValue: -4, maxValue: 4,
-                automationRate: 'k-rate'},
-            {name: 'tune', defaultValue: 0, minValue: -48, maxValue: 48,
-                automationRate: 'k-rate'},        // semitones
+            {name: 'wave', defaultValue: 0, minValue: 0, maxValue: 3,
+                automationRate: 'k-rate'}, // 0 saw 1 square 2 triangle 3 sine
+            {name: 'frequency', defaultValue: 261.6255653005986,
+                minValue: 0.01, maxValue: 20000, automationRate: 'k-rate'},
             {name: 'pulse width', defaultValue: 0.5, minValue: 0,
                 maxValue: 1, automationRate: 'k-rate'}
         ];
@@ -74,26 +74,21 @@ class OscillatorProcessor extends AudioWorkletProcessor {
     }
 
     process(inputs, outputs, parameters) {
-        var pitch = channel(inputs, 0),
+        var control = channel(inputs, 0),
             trig = channel(inputs, 1),
-            saw = outputs[0][0],
-            sqr = outputs[1][0],
-            tri = outputs[2][0],
-            sin = outputs[3][0],
-            n = saw.length,
-            base = param(parameters, 'octave', 0) * 12
-                + param(parameters, 'tune', 0),
+            out = outputs[0][0],
+            n = out.length,
+            wave = Math.round(param(parameters, 'wave', 0)),
+            base = param(parameters, 'frequency', 0),
             pw = param(parameters, 'pulse width', 0),
             maxFreq = sampleRate * 0.45,
-            i, semis, freq, dt, t, s, p, tr;
+            i, freq, dt, t, v, tr;
 
         if (pw < 0.05) {pw = 0.05; }
         if (pw > 0.95) {pw = 0.95; }
 
         for (i = 0; i < n; i += 1) {
-            semis = base;
-            if (pitch) {semis += pitch[i]; }
-            freq = MIDDLE_C * Math.pow(2, semis / 12);
+            freq = control ? base * Math.pow(2, control[i] / 12) : base;
             if (freq > maxFreq) {freq = maxFreq; }
             if (freq < 0.01) {freq = 0.01; }
             dt = freq / sampleRate;
@@ -108,23 +103,24 @@ class OscillatorProcessor extends AudioWorkletProcessor {
             }
 
             t = this.phase;
-
-            // band-limited sawtooth
-            s = 2 * t - 1 - polyBlep(t, dt);
-            saw[i] = s;
-
-            // band-limited pulse
-            p = (t < pw ? 1 : -1) + polyBlep(t, dt)
-                - polyBlep((t + 1 - pw) % 1, dt);
-            sqr[i] = p;
-
-            // triangle: leaky integral of the 50% pulse
-            this.tri = this.tri * (1 - dt * 0.5)
-                + ((t < 0.5 ? 1 : -1) + polyBlep(t, dt)
-                    - polyBlep((t + 0.5) % 1, dt)) * 4 * dt;
-            tri[i] = this.tri;
-
-            sin[i] = Math.sin(TWO_PI * t);
+            switch (wave) {
+            case 1: // band-limited pulse
+                v = (t < pw ? 1 : -1) + polyBlep(t, dt)
+                    - polyBlep((t + 1 - pw) % 1, dt);
+                break;
+            case 2: // triangle: leaky integral of the 50% pulse
+                this.tri = this.tri * (1 - dt * 0.5)
+                    + ((t < 0.5 ? 1 : -1) + polyBlep(t, dt)
+                        - polyBlep((t + 0.5) % 1, dt)) * 4 * dt;
+                v = this.tri;
+                break;
+            case 3:
+                v = Math.sin(TWO_PI * t);
+                break;
+            default: // band-limited sawtooth
+                v = 2 * t - 1 - polyBlep(t, dt);
+            }
+            out[i] = v;
 
             this.phase += dt;
             if (this.phase >= 1) {this.phase -= 1; }
