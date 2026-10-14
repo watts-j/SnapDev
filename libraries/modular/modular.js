@@ -73,7 +73,7 @@
             'note sequencer': 'a note sequencer'};
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js?v=11',
+        workletURL: 'libraries/modular/modular-worklet.js?v=12',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
@@ -351,6 +351,24 @@
         if (!(found instanceof List) || !this.isModule(found)) {
             throw new Error('there is no module named "' + value +
                 '" to plug into "' + jack + '"');
+        }
+        return found;
+    };
+
+    Modular.module = function (value) {
+        // answer the module table a block's module slot stands for: the
+        // table itself, or the global variable of that name (the slot's
+        // dropdown gives the name as text)
+        var frame, found;
+        if (value instanceof List || value === '' || value === null ||
+                value === undefined) {
+            return value;
+        }
+        frame = this.sprite ? this.sprite.globalVariables() : null;
+        found = frame && frame.vars[String(value)] ?
+            frame.vars[String(value)].value : undefined;
+        if (!(found instanceof List) || !this.isModule(found)) {
+            throw new Error('there is no module named "' + value + '"');
         }
         return found;
     };
@@ -847,7 +865,7 @@
         'syn_preset(number, module)',
         function (number, list) {
             Modular.sprite = this;
-            Modular.savePreset(this, number, list);
+            Modular.savePreset(this, number, Modular.module(list));
         }
     );
 
@@ -856,7 +874,7 @@
         function (type, list, values, proc) {
             Modular.sprite = this;
             if (Modular.waitUntilReady(proc)) {
-                Modular.setup(list, String(type), values);
+                Modular.setup(Modular.module(list), String(type), values);
             }
         }
     );
@@ -876,7 +894,8 @@
         function (list, state, proc) {
             Modular.sprite = this;
             if (Modular.waitUntilReady(proc)) {
-                Modular.gate(list, String(state).toLowerCase() === 'open');
+                Modular.gate(Modular.module(list),
+                    String(state).toLowerCase() === 'open');
             }
         }
     );
@@ -886,7 +905,7 @@
         function (list, proc) {
             Modular.sprite = this;
             if (Modular.waitUntilReady(proc)) {
-                Modular.toSpeaker(list);
+                Modular.toSpeaker(Modular.module(list));
             }
         }
     );

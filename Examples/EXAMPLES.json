@@ -28,6 +28,10 @@
     "name": "Live Tree"
   },
   {
+    "fileName": "modular-synth-demo.xml",
+    "name": "Modular Synth Demo"
+  },
+  {
     "fileName": "swimmer.xml",
     "name": "Swimmer"
   },
