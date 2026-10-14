@@ -6,7 +6,7 @@
     A module is a Snap! list of settings, held in a variable by the
     user, for example:
 
-        type       oscillator
+        module       oscillator
         wave         saw
         frequency    440
         pulse width  50
@@ -22,7 +22,7 @@
     primitives (prefix "syn_"):
         syn_create(type, name)         makes a global variable holding
                                        a new module
-        syn_set(type, module, setting, value)
+        syn_setup(type, module, values)  applies a whole row of settings
         syn_mix(inputs)                -> a mix module summing modules
         syn_gate(module, state)        opens or closes an ADSR's gate
         syn_speaker(module)
@@ -31,7 +31,7 @@
 */
 
 /*global SnapExtensions, Note, List, AudioWorkletNode, StageMorph,
-  IDE_Morph, Context, BlockMorph, InputSlotMorph, CustomCommandBlockMorph*/
+  IDE_Morph, Context*/
 
 (function () {
     'use strict';
@@ -39,7 +39,8 @@
     var WAVES = ['saw', 'square', 'triangle', 'sine'],
         CHOICES = {                 // settings chosen from a list
             wave: WAVES,
-            kind: ['white', 'random steps']
+            kind: ['white', 'random steps'],
+            type: ['low pass', 'high pass']
         },
         TEXT = ['pattern', 'notes'], // settings typed as text
         NUMERIC = ['frequency', 'pulse width', 'cutoff', 'resonance',
@@ -65,33 +66,10 @@
             'slew limiter': 'a slew limiter',
             'trigger divider': 'a trigger divider',
             'trigger sequencer': 'a trigger sequencer',
-            sequencer: 'a sequencer'},
-        SET_SPECS = {                                  // "set" block -> type
-            "set oscillator %'module' %'setting' to %'value'": 'oscillator',
-            "set filter %'module' %'setting' to %'value'": 'filter',
-            "set ADSR %'module' %'setting' to %'value'": 'adsr',
-            "set volume %'module' %'setting' to %'value'": 'volume',
-            "set LFO %'module' %'setting' to %'value'": 'lfo',
-            "set delay %'module' %'setting' to %'value'": 'delay',
-            "set noise %'module' %'setting' to %'value'": 'noise',
-            "set ring modulator %'module' %'setting' to %'value'":
-                'ring modulator',
-            "set wavefolder %'module' %'setting' to %'value'": 'wavefolder',
-            "set waveform processor %'module' %'setting' to %'value'":
-                'waveform processor',
-            "set audio divider %'module' %'setting' to %'value'":
-                'audio divider',
-            "set slew limiter %'module' %'setting' to %'value'":
-                'slew limiter',
-            "set trigger divider %'module' %'setting' to %'value'":
-                'trigger divider',
-            "set trigger sequencer %'module' %'setting' to %'value'":
-                'trigger sequencer',
-            "set sequencer %'module' %'setting' to %'value'": 'sequencer'
-        };
+            sequencer: 'a sequencer'};
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js?v=6',
+        workletURL: 'libraries/modular/modular-worklet.js?v=7',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
@@ -113,6 +91,7 @@
             filter: {
                 processor: 'modular-filter',
                 settings: [
+                    ['type', 'low pass'],
                     ['cutoff', 1000],
                     ['resonance', 100]
                 ],
@@ -322,7 +301,9 @@
     };
 
     Modular.typeOf = function (list) {
-        var row = this.row(list, 'type');
+        // the first row names the kind of module ("module"; older
+        // tables used "type")
+        var row = this.row(list, 'module') || this.row(list, 'type');
         return row ? String(row.at(2)) : null;
     };
 
@@ -342,7 +323,7 @@
 
     Modular.newList = function (type) {
         var spec = this.types[type],
-            rows = [new List(['type', type])];
+            rows = [new List(['module', type])];
         spec.settings.forEach(pair => {
             rows.push(new List([pair[0], pair[1]]));
         });
@@ -458,7 +439,7 @@
         // answer a new mix module summing the given modules
         var items = sources instanceof List ? sources.itemsArray() : [],
             list = new List([
-                new List(['type', 'mix']),
+                new List(['module', 'mix']),
                 new List(['inputs', new List(items.filter(item =>
                     item !== '' && item !== null && item !== undefined
                 ))])
@@ -545,29 +526,88 @@
             key = String(setting),
             rec = this.ensure(list),
             row = this.row(list, key),
-            stored, source;
+            stored, source, current;
         if (expectedType && this.typeOf(list) !== expectedType) {
             throw new Error('expecting ' + LABELS[expectedType] +
                 ' but getting ' + LABELS[this.typeOf(list)]);
         }
-        if (!row || key === 'type') {
+        if (!row || key === 'module') {
             throw new Error('a ' + this.typeOf(list) +
                 ' has no setting named "' + key + '"');
         }
+        current = row.at(2);
         if (spec.jacks.indexOf(key) > -1) {
             source = this.resolve(value, key);
             if (source instanceof List) {
+                if (this.sameSource(current, source) && rec.cables[key]) {
+                    return; // already plugged in
+                }
                 this.plug(list, rec, key, source);
                 stored = value instanceof List ? value : String(value);
             } else {
+                if (!rec.cables[key] && (current === '' || current === null)) {
+                    return; // already unplugged
+                }
                 this.unplug(rec, key, spec.jacks.indexOf(key));
                 stored = '';
             }
         } else {
+            if (this.sameValue(key, current, value)) {
+                return; // unchanged, so leave the engine alone
+            }
             stored = this.applySetting(list, rec, key, value);
         }
         row.put(stored, 2);
         list.changed();
+    };
+
+    Modular.sameSource = function (current, source) {
+        // is the module already named in a jack row the given one?
+        var resolved;
+        try {
+            resolved = this.resolve(current, '');
+        } catch (ignored) {
+            return false;
+        }
+        return resolved === source;
+    };
+
+    Modular.sameValue = function (key, current, value) {
+        // would setting the value change what the row holds?
+        var v;
+        if (TEXT.indexOf(key) > -1) {
+            return String(current) === String(value);
+        }
+        if (CHOICES[key]) {
+            return String(current).toLowerCase() ===
+                String(value).toLowerCase();
+        }
+        v = +value;
+        if (isNaN(v) || current === '' || current === null) {
+            return false;
+        }
+        if (PERCENT.indexOf(key) > -1) {
+            v = Math.max(PERCENT_MIN[key] || 0,
+                Math.min(PERCENT_MAX[key] || 100, v));
+        }
+        return +current === v;
+    };
+
+    Modular.setup = function (list, type, values) {
+        // apply a whole row of settings and jacks, in table order;
+        // an empty jack slot unplugs that jack
+        var spec = this.spec(list),
+            items = values instanceof List ? values.itemsArray() : [],
+            keys = spec.settings.map(pair => pair[0]).concat(spec.jacks);
+        if (this.typeOf(list) !== type) {
+            throw new Error('expecting ' + LABELS[type] +
+                ' but getting ' + LABELS[this.typeOf(list)]);
+        }
+        keys.forEach((key, i) => {
+            var value = items[i];
+            this.set(list, key, value === null || value === undefined ?
+                '' : value);
+        });
     };
 
     Modular.gate = function (list, open) {
@@ -644,7 +684,7 @@
                 .replace(/</g, '&lt;').replace(/>/g, '&gt;'),
             pair = (key, val) => '<block s="reportNewList"><list><l>' +
                 esc(key) + '</l><l>' + esc(val) + '</l></list></block>',
-            items = [pair('type', this.typeOf(list))];
+            items = [pair('module', this.typeOf(list))];
         spec.settings.forEach(setting => {
             var row = this.row(list, setting[0]);
             items.push(pair(setting[0], row ? row.at(2) : setting[1]));
@@ -701,11 +741,11 @@
     );
 
     SnapExtensions.primitives.set(
-        'syn_set(type, module, setting, value)',
-        function (type, list, setting, value, proc) {
+        'syn_setup(type, module, values)',
+        function (type, list, values, proc) {
             Modular.sprite = this;
             if (Modular.waitUntilReady(proc)) {
-                Modular.set(list, setting, value, String(type));
+                Modular.setup(list, String(type), values);
             }
         }
     );
@@ -740,174 +780,18 @@
         }
     );
 
-    // menus for the "set <module>" blocks
-    // the value slot follows the chosen setting: a read-only list of
-    // waves, a read-only list of modules, or a typed number
-
-    function blockType(slot) {
-        // answer the module type a "set" block's slot belongs to
-        var block = slot.parentThatIsA(BlockMorph);
-        return block && block.definition ?
-            SET_SPECS[block.definition.spec] : null;
-    }
-
-    function settingNames(type) {
-        var spec = Modular.types[type];
-        return spec ? spec.settings.map(pair => pair[0]).concat(spec.jacks)
-            : [];
-    }
-
-    function siblingSlot(slot, offset) {
-        var block = slot.parentThatIsA(BlockMorph),
-            inputs = block ? block.inputs() : [],
-            idx = inputs.indexOf(slot),
-            other = idx > -1 ? inputs[idx + offset] : null;
-        return other instanceof InputSlotMorph ? other : null;
-    }
-
-    function shapeValueSlot(valueSlot, setting) {
-        // make the value slot read-only or editable to suit the setting
-        // and replace contents that no longer fit
-        var current = valueSlot.evaluate(),
-            block = valueSlot.parentThatIsA(BlockMorph),
-            type = blockType(valueSlot),
-            spec = Modular.types[type],
-            def = spec ? spec.settings.find(pair => pair[0] === setting)
-                : null;
-        applyShape(valueSlot, setting);
-        if (CHOICES[setting]) {
-            if (CHOICES[setting].indexOf(String(current)) < 0) {
-                valueSlot.setContents(def ? def[1] : CHOICES[setting][0]);
-            }
-        } else if (NUMERIC.indexOf(setting) > -1) {
-            if (current === '' || isNaN(+current)) {
-                valueSlot.setContents(def ? def[1] : 0);
-            }
-        } else if (TEXT.indexOf(setting) > -1) {
-            if (current === '') {
-                valueSlot.setContents(def ? def[1] : '');
-            }
-        } else if (!(current === '' || Modular.moduleNames(
-                Modular.sprite || valueSlot.parentThatIsA(IDE_Morph)
-                    .currentSprite).indexOf(String(current)) > -1)) {
-            valueSlot.setContents('');
-        }
-        valueSlot.fixLayout();
-        valueSlot.rerender();
-        if (block) {
-            block.fixLayout();
-            block.changed();
-        }
-    }
-
-    function applyShape(valueSlot, setting) {
-        // numeric settings: a typed number without a dropdown;
-        // anything else: a read-only dropdown.
-        // answer true if the shape changed
-        var before = String(valueSlot.choices) + valueSlot.isReadOnly;
-        valueSlot.isModularValue = true;
-        if (NUMERIC.indexOf(setting) > -1 || TEXT.indexOf(setting) > -1) {
-            valueSlot.isReadOnly = false;
-            valueSlot.choices = null;
-            valueSlot.arrow().setSize(0); // so clicks reach the text
-        } else if (setting) {
-            valueSlot.isReadOnly = true;
-            valueSlot.choices = 'ext_syn_values';
-        }
-        return String(valueSlot.choices) + valueSlot.isReadOnly !== before;
-    }
-
-    function showUnit(block, unit) {
-        // show a unit label such as "Hz" after the value slot, or none
-        var label = block.children.find(child => child.isModularUnit);
-        if (label && label.text !== unit) {
-            label.destroy();
-            label = null;
-        }
-        if (unit && !label) {
-            label = block.labelPart(unit);
-            label.isModularUnit = true;
-            block.add(label);
-        }
-    }
-
-    function shapeFromSetting(valueSlot) {
-        // apply the shape the chosen setting calls for, e.g. on a
-        // block that came back from a saved project
-        var settingSlot = siblingSlot(valueSlot, -1);
-        if (settingSlot) {
-            applyShape(valueSlot, String(settingSlot.evaluate()));
-        }
-    }
-
-    if (!InputSlotMorph.prototype.modularHooked) {
-        InputSlotMorph.prototype.modularHooked = true;
-        // whenever a "set oscillator" block lays itself out, e.g. when a
-        // project loads, its value slot takes the shape its setting needs
-        CustomCommandBlockMorph.prototype.fixLayoutBeforeModular =
-            CustomCommandBlockMorph.prototype.fixLayout;
-        CustomCommandBlockMorph.prototype.fixLayout = function () {
-            var inputs, setting;
-            if (this.definition && SET_SPECS[this.definition.spec]) {
-                inputs = this.inputs();
-                if (inputs[1] instanceof InputSlotMorph &&
-                        inputs[2] instanceof InputSlotMorph) {
-                    setting = String(inputs[1].evaluate());
-                    if (applyShape(inputs[2], setting)) {
-                        inputs[2].fixLayout();
-                    }
-                    showUnit(this, UNITS[setting]);
-                }
-            }
-            return this.fixLayoutBeforeModular();
-        };
-        InputSlotMorph.prototype.mouseDownLeftBeforeModular =
-            InputSlotMorph.prototype.mouseDownLeft;
-        InputSlotMorph.prototype.mouseDownLeft = function (pos) {
-            if (this.choices === 'ext_syn_values' || this.isModularValue) {
-                shapeFromSetting(this);
-            }
-            return this.mouseDownLeftBeforeModular(pos);
-        };
-    }
+    // menu: the names of the variables that hold modules, for jack slots
 
     SnapExtensions.menus.set(
-        'syn_settings',
+        'syn_names',
         function () {
-            var slot = this,
-                menu = {};
-            settingNames(blockType(slot)).forEach(key => {
-                menu[key] = function () {
-                    var valueSlot = siblingSlot(slot, 1);
-                    slot.setContents(key);
-                    if (valueSlot) {
-                        shapeValueSlot(valueSlot, key);
-                    }
-                    return key;
-                };
-            });
-            return menu;
-        }
-    );
-
-    SnapExtensions.menus.set(
-        'syn_values',
-        function () {
-            var settingSlot = siblingSlot(this, -1),
-                setting = settingSlot ? String(settingSlot.evaluate()) : '',
-                ide = this.parentThatIsA(IDE_Morph),
+            var ide = this.parentThatIsA(IDE_Morph),
                 sprite = ide ? ide.currentSprite : Modular.sprite,
-                spec = Modular.types[blockType(this)],
                 menu = {};
-            shapeFromSetting(this);
-            if (CHOICES[setting]) {
-                CHOICES[setting].forEach(item => {menu[item] = item; });
-            } else if (spec && spec.jacks.indexOf(setting) > -1) {
-                if (sprite) {
-                    Modular.moduleNames(sprite).forEach(name => {
-                        menu[name] = name;
-                    });
-                }
+            if (sprite) {
+                Modular.moduleNames(sprite).forEach(name => {
+                    menu[name] = name;
+                });
             }
             return menu;
         }

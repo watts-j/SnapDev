@@ -132,11 +132,13 @@ class OscillatorProcessor extends AudioWorkletProcessor {
 // filter (24 dB low pass ladder)
 
 class FilterProcessor extends AudioWorkletProcessor {
-    // inputs:  0 input  1 cutoff (semitones)
-    // outputs: 0 output
+    // inputs:  0 input  1 control (semitones added to the cutoff)
+    // outputs: 0 output (low pass or high pass)
 
     static get parameterDescriptors() {
         return [
+            {name: 'type', defaultValue: 0, minValue: 0, maxValue: 1,
+                automationRate: 'k-rate'}, // 0 low pass  1 high pass
             {name: 'cutoff', defaultValue: 1000, minValue: 10,
                 maxValue: 20000, automationRate: 'k-rate'}, // Hz
             {name: 'resonance', defaultValue: 1, minValue: 0, maxValue: 1,
@@ -158,6 +160,7 @@ class FilterProcessor extends AudioWorkletProcessor {
             out = outputs[0][0],
             n = out.length,
             fKnob = param(parameters, 'cutoff', 0),
+            highPass = param(parameters, 'type', 0) > 0.5,
             k = param(parameters, 'resonance', 0) * 5, // feedback amount
             maxFc = Math.min(20000, sampleRate * 0.45),
             i, fc, g, G, S, u, x, v,
@@ -181,7 +184,8 @@ class FilterProcessor extends AudioWorkletProcessor {
             v = (u - s3) * G; u = v + s3; s3 = u + v;
             v = (u - s4) * G; u = v + s4; s4 = u + v;
 
-            out[i] = u;
+            // high pass: what the low pass removed
+            out[i] = highPass ? x - u : u;
         }
         this.s1 = s1; this.s2 = s2; this.s3 = s3; this.s4 = s4;
         return true;
