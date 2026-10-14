@@ -69,7 +69,7 @@
             sequencer: 'a sequencer'};
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js?v=7',
+        workletURL: 'libraries/modular/modular-worklet.js?v=8',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
