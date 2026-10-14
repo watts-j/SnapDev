@@ -2825,7 +2825,7 @@
       "Set Note Sequencer _ Notes: _ Tempo: _ steps/min Clock: _",
       "Gate _ _",
       "Mix _",
-      "Set Speaker Input to _",
+      "Set Speaker Input to _ Scope On Scope Off",
       "Preset 1",
       "Set Preset _ to Oscillator _"
     ],

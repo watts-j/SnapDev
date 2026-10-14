@@ -25,7 +25,8 @@
         syn_setup(type, module, values)  applies a whole row of settings
         syn_mix(inputs)                -> a mix module summing modules
         syn_gate(module, state)        opens or closes an ADSR's gate
-        syn_speaker(module)
+        syn_speaker(module)            plugs a module into the speaker
+        syn_scope(state)               shows ('on') or hides the oscilloscope
         syn_preset(number, module)     copies a module's settings into
                                        the body of the "Preset <n>" block
 */
@@ -72,7 +73,7 @@
             'note sequencer': 'a note sequencer'};
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js?v=10',
+        workletURL: 'libraries/modular/modular-worklet.js?v=11',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
@@ -653,6 +654,117 @@
         };
     }
 
+    // oscilloscope: a panel in the middle of the stage that draws the
+    // sound reaching the speaker
+
+    function ScopeMorph(analyser, stage) {
+        this.init(analyser, stage);
+    }
+
+    ScopeMorph.prototype = new Morph();
+    ScopeMorph.prototype.constructor = ScopeMorph;
+    ScopeMorph.uber = Morph.prototype;
+
+    ScopeMorph.prototype.init = function (analyser, stage) {
+        ScopeMorph.uber.init.call(this);
+        this.analyser = analyser;
+        this.stage = stage;
+        this.samples = new Float32Array(analyser.fftSize);
+        this.fps = 30;
+        this.fixLayout();
+    };
+
+    ScopeMorph.prototype.fixLayout = function () {
+        // follow the stage's size and scale, centered
+        var ext = this.stage.extent(),
+            size = new Point(Math.round(ext.x * 0.6), Math.round(ext.y * 0.4));
+        if (!this.extent().eq(size)) {
+            this.bounds.setWidth(size.x);
+            this.bounds.setHeight(size.y);
+            this.rerender();
+        }
+        this.setCenter(this.stage.center());
+    };
+
+    ScopeMorph.prototype.step = function () {
+        var kids = this.stage.children;
+        if (kids[kids.length - 1] !== this) {
+            this.stage.add(this); // stay in front of sprites and watchers
+        }
+        this.fixLayout();
+        this.analyser.getFloatTimeDomainData(this.samples);
+        this.rerender();
+    };
+
+    ScopeMorph.prototype.render = function (ctx) {
+        var w = this.width(),
+            h = this.height(),
+            data = this.samples,
+            span = Math.floor(data.length / 2),
+            mid = h / 2,
+            amp = h * 0.45,
+            start = 0,
+            i, x, y;
+
+        ctx.fillStyle = 'rgb(12, 22, 18)';
+        ctx.fillRect(0, 0, w, h);
+        ctx.strokeStyle = 'rgba(90, 170, 110, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(0, mid + 0.5);
+        ctx.lineTo(w, mid + 0.5);
+        ctx.stroke();
+
+        // start the trace where the wave rises through zero, so a steady
+        // tone stands still
+        for (i = 1; i < span; i += 1) {
+            if (data[i - 1] < 0 && data[i] >= 0) {
+                start = i;
+                break;
+            }
+        }
+        ctx.strokeStyle = 'rgb(90, 230, 120)';
+        ctx.lineWidth = 2;
+        ctx.lineJoin = 'round';
+        ctx.beginPath();
+        for (i = 0; i < span; i += 1) {
+            x = i / (span - 1) * w;
+            y = mid - data[start + i] * amp;
+            if (i === 0) {
+                ctx.moveTo(x, y);
+            } else {
+                ctx.lineTo(x, y);
+            }
+        }
+        ctx.stroke();
+        ctx.strokeStyle = 'rgb(120, 60, 160)';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(1, 1, w - 2, h - 2);
+    };
+
+    Modular.scopeOn = function (stage) {
+        this.ensureSpeaker();
+        if (!this.analyser) {
+            this.analyser = this.context().createAnalyser();
+            this.analyser.fftSize = 2048;
+            this.analyser.smoothingTimeConstant = 0;
+            this.speaker.connect(this.analyser);
+        }
+        if (this.scope && this.scope.parent === stage) {
+            return;
+        }
+        this.scopeOff();
+        this.scope = new ScopeMorph(this.analyser, stage);
+        stage.add(this.scope);
+    };
+
+    Modular.scopeOff = function () {
+        if (this.scope) {
+            this.scope.destroy();
+            this.scope = null;
+        }
+    };
+
     // variables
 
     Modular.createVariable = function (sprite, type, name) {
@@ -775,6 +887,18 @@
             Modular.sprite = this;
             if (Modular.waitUntilReady(proc)) {
                 Modular.toSpeaker(list);
+            }
+        }
+    );
+
+    SnapExtensions.primitives.set(
+        'syn_scope(state)',
+        function (state) {
+            var stage = this.parentThatIsA(StageMorph);
+            if (String(state).toLowerCase() === 'on') {
+                Modular.scopeOn(stage);
+            } else {
+                Modular.scopeOff();
             }
         }
     );
