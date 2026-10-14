@@ -7,7 +7,7 @@
     user, for example:
 
         module       oscillator
-        wave         saw
+        wave type    saw
         frequency    440
         pulse width  50
         control      (empty, or another module's list)
@@ -38,9 +38,13 @@
 
     var WAVES = ['saw', 'square', 'triangle', 'sine'],
         CHOICES = {                 // settings chosen from a list
-            wave: WAVES,
-            kind: ['white', 'random steps'],
+            'wave type': WAVES,
+            'noise type': ['white', 'random steps'],
             type: ['low pass', 'high pass']
+        },
+        OLD_NAMES = {               // row names used by earlier tables
+            'wave type': 'wave',
+            'noise type': 'kind'
         },
         TEXT = ['pattern', 'notes'], // settings typed as text
         NUMERIC = ['frequency', 'pulse width', 'cutoff', 'resonance',
@@ -60,7 +64,6 @@
             adsr: 'an ADSR', volume: 'a volume', lfo: 'an LFO',
             mix: 'a mix', delay: 'a delay', noise: 'a noise',
             'ring modulator': 'a ring modulator',
-            wavefolder: 'a wavefolder',
             'waveform processor': 'a waveform processor',
             'audio divider': 'an audio divider',
             'slew limiter': 'a slew limiter',
@@ -69,7 +72,7 @@
             sequencer: 'a sequencer'};
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js?v=8',
+        workletURL: 'libraries/modular/modular-worklet.js?v=9',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
@@ -81,7 +84,7 @@
             oscillator: {
                 processor: 'modular-oscillator',
                 settings: [
-                    ['wave', 'saw'],
+                    ['wave type', 'saw'],
                     ['frequency', 440],
                     ['pulse width', 50]
                 ],
@@ -121,7 +124,7 @@
             lfo: {
                 processor: 'modular-wobble',
                 settings: [
-                    ['wave', 'sine'],
+                    ['wave type', 'sine'],
                     ['speed', 5],
                     ['amount', 1]
                 ],
@@ -148,7 +151,7 @@
             noise: {
                 processor: 'modular-noise',
                 settings: [
-                    ['kind', 'white'],
+                    ['noise type', 'white'],
                     ['speed', 8],
                     ['amount', 1]
                 ],
@@ -159,14 +162,6 @@
                 processor: 'modular-ring',
                 settings: [],
                 jacks: ['input', 'input 2'],
-                outputs: 1
-            },
-            wavefolder: {
-                processor: 'modular-fold',
-                settings: [
-                    ['fold', 50]
-                ],
-                jacks: ['input'],
                 outputs: 1
             },
             'waveform processor': {
@@ -296,7 +291,9 @@
 
     Modular.row = function (list, key) {
         var rows = this.rows(list) || [],
-            found = rows.find(pair => pair[0] === key);
+            found = rows.find(pair => pair[0] === key) ||
+                (OLD_NAMES[key] ?
+                    rows.find(pair => pair[0] === OLD_NAMES[key]) : null);
         return found ? found[1] : null;
     };
 
@@ -482,7 +479,8 @@
             rec.node.port.postMessage({text: v});
             return v;
         }
-        p = rec.node.parameters.get(key);
+        p = rec.node.parameters.get(key === 'wave type' ? 'wave' :
+            key === 'noise type' ? 'kind' : key);
         if (choices) {
             v = choices.indexOf(String(value).toLowerCase());
             if (v < 0) {

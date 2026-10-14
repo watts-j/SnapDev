@@ -505,7 +505,7 @@ class RingProcessor extends AudioWorkletProcessor {
     }
 }
 
-// wavefolder, also used by the waveform processor
+// waveform processor (wavefolding)
 
 function fold(y) {
     // reflect a value back into -1 .. +1, as many times as needed
