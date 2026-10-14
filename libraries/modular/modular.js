@@ -27,6 +27,8 @@
         syn_gate(module, state)        opens or closes an ADSR's gate
         syn_speaker(module)            plugs a module into the speaker
         syn_scope(state)               shows ('on') or hides the oscilloscope
+        menus: syn_names (jack entries), syn_modules (module names),
+        syn_sources (keyboard sources)
         syn_preset(number, module)     copies a module's settings into
                                        the body of the "Preset <n>" block
 */
@@ -47,11 +49,13 @@
             'wave type': 'wave',
             'noise type': 'kind'
         },
-        TEXT = ['pattern', 'notes'], // settings typed as text
+        TEXT = ['pattern', 'notes', 'source'], // settings typed as text
+        KEYS = ['a', 'w', 's', 'e', 'd', 'f', 't', 'g', 'y', 'h', 'u', 'j',
+            'k', 'o', 'l', 'p', ';'], // computer keys as semitones upward
         NUMERIC = ['frequency', 'pulse width', 'cutoff', 'resonance',
             'attack', 'decay', 'sustain', 'release', 'amount', 'level',
             'speed', 'time', 'repeats', 'blend', 'fold', 'octaves', 'rise',
-            'fall', 'divide by', 'tempo'],
+            'fall', 'divide by', 'tempo', 'lowest note'],
         PERCENT = ['pulse width', 'resonance', 'sustain', 'level',
             'repeats', 'blend', 'fold'], // typed 0 to 100, scaled inside
         PERCENT_MAX = {'pulse width': 99, repeats: 95},
@@ -70,10 +74,11 @@
             'slew limiter': 'a slew limiter',
             'trigger divider': 'a trigger divider',
             'trigger sequencer': 'a trigger sequencer',
-            'note sequencer': 'a note sequencer'};
+            'note sequencer': 'a note sequencer',
+            keyboard: 'a keyboard'};
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js?v=12',
+        workletURL: 'libraries/modular/modular-worklet.js?v=13',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
@@ -215,6 +220,16 @@
                 ],
                 jacks: ['clock'],
                 outputs: 1
+            },
+            keyboard: {
+                processor: 'modular-keyboard',
+                settings: [
+                    ['source', 'computer keyboard'],
+                    ['lowest note', 60]
+                ],
+                jacks: [],
+                outputs: 3,
+                outputNames: ['pitch', 'gate', 'velocity']
             }
         }
     };
@@ -373,6 +388,49 @@
         return found;
     };
 
+    Modular.lookup = function (name) {
+        // answer the module table held in the global variable of that
+        // name, or null
+        var frame = this.sprite ? this.sprite.globalVariables() : null,
+            found = frame && frame.vars[String(name)] ?
+                frame.vars[String(name)].value : null;
+        return found instanceof List && this.isModule(found) ? found : null;
+    };
+
+    Modular.source = function (value, jack) {
+        // answer {list, output} for what a jack row holds: a module
+        // table, the name of one, or "name: output" for a module with
+        // several outputs; null for an empty jack
+        var text, idx, name, outputName, list, names, output;
+        if (value instanceof List) {
+            return {list: this.resolve(value, jack), output: 0};
+        }
+        if (value === '' || value === null || value === undefined) {
+            return null;
+        }
+        text = String(value);
+        idx = text.lastIndexOf(': ');
+        if (idx > -1 && !this.lookup(text)) {
+            name = text.slice(0, idx);
+            outputName = text.slice(idx + 2).toLowerCase();
+            list = this.resolve(name, jack);
+            names = this.spec(list).outputNames || [];
+            output = names.indexOf(outputName);
+            if (output < 0) {
+                throw new Error('"' + name + '" has no output named "' +
+                    outputName + '"');
+            }
+            return {list: list, output: output};
+        }
+        return {list: this.resolve(text, jack), output: 0};
+    };
+
+    Modular.outputNamesFor = function (name, list) {
+        // answer the dropdown entries that stand for a module's outputs
+        var names = this.spec(list).outputNames;
+        return names ? names.map(each => name + ': ' + each) : [name];
+    };
+
     Modular.moduleNames = function (sprite) {
         // answer the names of global variables holding modules
         var frame = sprite.globalVariables();
@@ -404,10 +462,10 @@
             node = new AudioWorkletNode(this.context(), spec.processor, {
                 numberOfInputs: spec.jacks.length,
                 numberOfOutputs: spec.outputs,
-                outputChannelCount: [1]
+                outputChannelCount: new Array(spec.outputs).fill(1)
             });
         }
-        rec = {node: node, cables: {}};
+        rec = {node: node, cables: {}, outputs: {}};
         this.nodes.set(list, rec);
         spec.settings.forEach(pair => {
             var row = this.row(list, pair[0]);
@@ -422,8 +480,8 @@
                 this.plugAll(list, rec, row ? row.at(2) : null, visiting);
                 return;
             }
-            source = this.resolve(row ? row.at(2) : '', jack);
-            if (source instanceof List) {
+            source = this.source(row ? row.at(2) : '', jack);
+            if (source) {
                 this.plug(list, rec, jack, source, visiting);
             }
         });
@@ -442,11 +500,11 @@
         });
         rec.cables.inputs = [];
         items.forEach(item => {
-            var source = this.resolve(item, 'inputs'),
+            var source = this.source(item, 'inputs'),
                 srcRec;
-            if (source instanceof List) {
-                srcRec = this.ensure(source, visiting);
-                srcRec.node.connect(rec.node);
+            if (source) {
+                srcRec = this.ensure(source.list, visiting);
+                srcRec.node.connect(rec.node, source.output, 0);
                 rec.cables.inputs.push(srcRec);
             }
         });
@@ -466,15 +524,16 @@
     };
 
     Modular.plug = function (list, rec, jack, source, visiting) {
-        // connect the source module's output into this module's jack
+        // connect a source ({list, output}) into this module's jack
         var spec = this.spec(list),
             idx = spec.jacks.indexOf(jack),
             srcRec;
         this.unplug(rec, jack, idx);
-        if (source instanceof List) {
-            srcRec = this.ensure(source, visiting);
-            srcRec.node.connect(rec.node, 0, idx);
+        if (source) {
+            srcRec = this.ensure(source.list, visiting);
+            srcRec.node.connect(rec.node, source.output, idx);
             rec.cables[jack] = srcRec;
+            rec.outputs[jack] = source.output;
         }
     };
 
@@ -482,11 +541,12 @@
         var old = rec.cables[jack];
         if (old) {
             try {
-                old.node.disconnect(rec.node, 0, idx);
+                old.node.disconnect(rec.node, rec.outputs[jack] || 0, idx);
             } catch (ignored) {
                 // already disconnected
             }
             delete rec.cables[jack];
+            delete rec.outputs[jack];
         }
     };
 
@@ -494,6 +554,22 @@
         var ctx = this.context(),
             choices = CHOICES[key],
             p, v;
+        if (key === 'source') {
+            v = String(value);
+            this.attachSource(rec, v);
+            return v;
+        }
+        if (key === 'lowest note') {
+            v = Math.round(+value);
+            if (isNaN(v)) {
+                throw new Error(
+                    'expecting a number but getting "' + value + '"'
+                );
+            }
+            v = Math.max(0, Math.min(115, v));
+            rec.lowestNote = v;
+            return v;
+        }
         if (TEXT.indexOf(key) > -1) {
             v = String(value);
             rec.node.port.postMessage({text: v});
@@ -555,8 +631,8 @@
         }
         current = row.at(2);
         if (spec.jacks.indexOf(key) > -1) {
-            source = this.resolve(value, key);
-            if (source instanceof List) {
+            source = this.source(value, key);
+            if (source) {
                 if (this.sameSource(current, source) && rec.cables[key]) {
                     return; // already plugged in
                 }
@@ -580,14 +656,15 @@
     };
 
     Modular.sameSource = function (current, source) {
-        // is the module already named in a jack row the given one?
+        // is the source already named in a jack row the given one?
         var resolved;
         try {
-            resolved = this.resolve(current, '');
+            resolved = this.source(current, '');
         } catch (ignored) {
             return false;
         }
-        return resolved === source;
+        return !!resolved && resolved.list === source.list &&
+            resolved.output === source.output;
     };
 
     Modular.sameValue = function (key, current, value) {
@@ -639,7 +716,7 @@
         p.setValueAtTime(open ? 1 : 0, this.context().currentTime);
     };
 
-    Modular.toSpeaker = function (list) {
+    Modular.toSpeaker = function (list, output) {
         var rec;
         this.ensureSpeaker();
         if (this.speakerSource) {
@@ -654,7 +731,7 @@
             return;
         }
         rec = this.ensure(list);
-        rec.node.connect(this.speaker);
+        rec.node.connect(this.speaker, output || 0);
         this.speakerSource = rec;
     };
 
@@ -783,6 +860,124 @@
         }
     };
 
+    // keyboards: notes from the computer keyboard or a MIDI device
+
+    Modular.keyboards = new Set(); // records listening to the computer keys
+
+    Modular.attachSource = function (rec, name) {
+        this.detachSource(rec);
+        rec.held = [];
+        if (name.toLowerCase() === 'computer keyboard') {
+            this.keyboards.add(rec);
+            this.listenToKeys();
+            return;
+        }
+        rec.midiName = name;
+        this.midi().then(access => {
+            if (rec.midiName !== name) {
+                return; // the source changed meanwhile
+            }
+            access.inputs.forEach(input => {
+                if (input.name === name) {
+                    rec.midiInput = input;
+                    rec.onMidi = event => this.midiMessage(rec, event.data);
+                    input.addEventListener('midimessage', rec.onMidi);
+                }
+            });
+        }, () => null);
+    };
+
+    Modular.detachSource = function (rec) {
+        this.keyboards.delete(rec);
+        if (rec.midiInput) {
+            rec.midiInput.removeEventListener('midimessage', rec.onMidi);
+            rec.midiInput = null;
+        }
+        rec.midiName = null;
+        if (rec.held && rec.held.length) {
+            rec.held = [];
+            rec.node.port.postMessage({gate: 0});
+        }
+    };
+
+    Modular.noteOn = function (rec, note, velocity) {
+        rec.held = rec.held.filter(each => each !== note);
+        rec.held.push(note);
+        rec.node.port.postMessage({note: note, gate: 1, velocity: velocity});
+    };
+
+    Modular.noteOff = function (rec, note) {
+        rec.held = rec.held.filter(each => each !== note);
+        if (rec.held.length) { // fall back to the last key still held
+            rec.node.port.postMessage({note: rec.held[rec.held.length - 1]});
+        } else {
+            rec.node.port.postMessage({gate: 0});
+        }
+    };
+
+    Modular.midiMessage = function (rec, data) {
+        var command = data[0] & 0xF0,
+            note = data[1],
+            velocity = data[2];
+        if (command === 0x90 && velocity > 0) {
+            this.noteOn(rec, note, Math.round(velocity / 127 * 100));
+        } else if (command === 0x80 || (command === 0x90 && velocity === 0)) {
+            this.noteOff(rec, note);
+        }
+    };
+
+    Modular.midi = function () {
+        // answer a Promise of MIDI access, asking the browser once
+        if (!this.midiAccess) {
+            this.midiAccess = navigator.requestMIDIAccess ?
+                navigator.requestMIDIAccess() :
+                Promise.reject(new Error('MIDI is not available here'));
+            this.midiAccess.then(access => {
+                this.midiDevices = access;
+            }, () => null);
+        }
+        return this.midiAccess;
+    };
+
+    Modular.midiInputNames = function () {
+        var names = [];
+        if (this.midiDevices) {
+            this.midiDevices.inputs.forEach(input => names.push(input.name));
+        }
+        return names;
+    };
+
+    Modular.listenToKeys = function () {
+        if (this.keysHooked) {
+            return;
+        }
+        this.keysHooked = true;
+        document.addEventListener('keydown',
+            event => this.keyEvent(event, true), true);
+        document.addEventListener('keyup',
+            event => this.keyEvent(event, false), true);
+    };
+
+    Modular.keyEvent = function (event, down) {
+        var idx = KEYS.indexOf(String(event.key).toLowerCase());
+        if (idx < 0 || event.repeat || event.ctrlKey || event.metaKey ||
+                event.altKey) {
+            return;
+        }
+        if (down && typeof world !== 'undefined' && world.cursor) {
+            return; // typing into a text field
+        }
+        this.keyboards.forEach(rec => {
+            var note = (rec.lowestNote === undefined ? 60 : rec.lowestNote) +
+                idx;
+            if (down) {
+                this.noteOn(rec, note, 100);
+            } else {
+                this.noteOff(rec, note);
+            }
+        });
+    };
+
     // variables
 
     Modular.createVariable = function (sprite, type, name) {
@@ -903,9 +1098,11 @@
     SnapExtensions.primitives.set(
         'syn_speaker(module)',
         function (list, proc) {
+            var src;
             Modular.sprite = this;
             if (Modular.waitUntilReady(proc)) {
-                Modular.toSpeaker(Modular.module(list));
+                src = Modular.source(list, 'speaker');
+                Modular.toSpeaker(src ? src.list : '', src ? src.output : 0);
             }
         }
     );
@@ -931,10 +1128,45 @@
                 sprite = ide ? ide.currentSprite : Modular.sprite,
                 menu = {};
             if (sprite) {
+                Modular.sprite = sprite;
+                Modular.moduleNames(sprite).forEach(name => {
+                    Modular.outputNamesFor(name, Modular.lookup(name))
+                        .forEach(entry => {
+                            menu[entry] = entry;
+                        });
+                });
+            }
+            return menu;
+        }
+    );
+
+    // menu: the names of the variables that hold modules, for module slots
+
+    SnapExtensions.menus.set(
+        'syn_modules',
+        function () {
+            var ide = this.parentThatIsA(IDE_Morph),
+                sprite = ide ? ide.currentSprite : Modular.sprite,
+                menu = {};
+            if (sprite) {
                 Modular.moduleNames(sprite).forEach(name => {
                     menu[name] = name;
                 });
             }
+            return menu;
+        }
+    );
+
+    // menu: the computer keyboard and the MIDI devices found so far
+
+    SnapExtensions.menus.set(
+        'syn_sources',
+        function () {
+            var menu = {'computer keyboard': 'computer keyboard'};
+            Modular.midi().catch(() => null);
+            Modular.midiInputNames().forEach(name => {
+                menu[name] = name;
+            });
             return menu;
         }
     );

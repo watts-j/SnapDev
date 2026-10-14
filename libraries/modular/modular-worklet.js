@@ -755,6 +755,41 @@ class SequencerProcessor extends StepProcessor {
     }
 }
 
+class KeyboardProcessor extends AudioWorkletProcessor {
+    // inputs:  none
+    // outputs: 0 pitch (semitones; MIDI note 69 is 0)
+    //          1 gate (1 while a key is held)
+    //          2 velocity (0 .. 100, how hard the key was struck)
+    // the page sends {note, gate, velocity} messages from the computer
+    // keyboard or a MIDI device
+
+    constructor() {
+        super();
+        this.pitch = 0;
+        this.gate = 0;
+        this.velocity = 0;
+        this.port.onmessage = event => {
+            var msg = event.data;
+            if (typeof msg.note === 'number') {
+                this.pitch = msg.note - 69;
+            }
+            if (typeof msg.gate === 'number') {
+                this.gate = msg.gate;
+            }
+            if (typeof msg.velocity === 'number') {
+                this.velocity = msg.velocity;
+            }
+        };
+    }
+
+    process(inputs, outputs) {
+        outputs[0][0].fill(this.pitch);
+        outputs[1][0].fill(this.gate);
+        outputs[2][0].fill(this.velocity);
+        return true;
+    }
+}
+
 registerProcessor('modular-oscillator', OscillatorProcessor);
 registerProcessor('modular-filter', FilterProcessor);
 registerProcessor('modular-volume', VolumeProcessor);
@@ -769,3 +804,4 @@ registerProcessor('modular-slew', SlewProcessor);
 registerProcessor('modular-trigger-divider', TriggerDividerProcessor);
 registerProcessor('modular-trigger-sequencer', TriggerSequencerProcessor);
 registerProcessor('modular-sequencer', SequencerProcessor);
+registerProcessor('modular-keyboard', KeyboardProcessor);
