@@ -69,10 +69,10 @@
             'slew limiter': 'a slew limiter',
             'trigger divider': 'a trigger divider',
             'trigger sequencer': 'a trigger sequencer',
-            sequencer: 'a sequencer'};
+            'note sequencer': 'a note sequencer'};
 
     var Modular = {
-        workletURL: 'libraries/modular/modular-worklet.js?v=9',
+        workletURL: 'libraries/modular/modular-worklet.js?v=10',
         loading: null,      // Promise while the worklet loads
         ready: false,
         nodes: new WeakMap(), // settings list -> record {node, cables}
@@ -206,7 +206,7 @@
                 jacks: ['clock'],
                 outputs: 1
             },
-            sequencer: {
+            'note sequencer': {
                 processor: 'modular-sequencer',
                 settings: [
                     ['notes', '69 72 76 79'],
@@ -300,8 +300,9 @@
     Modular.typeOf = function (list) {
         // the first row names the kind of module ("module"; older
         // tables used "type")
-        var row = this.row(list, 'module') || this.row(list, 'type');
-        return row ? String(row.at(2)) : null;
+        var row = this.row(list, 'module') || this.row(list, 'type'),
+            type = row ? String(row.at(2)) : null;
+        return type === 'sequencer' ? 'note sequencer' : type; // older name
     };
 
     Modular.isModule = function (list) {

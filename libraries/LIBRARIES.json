@@ -2806,7 +2806,7 @@
   {
     "fileName": "modular.xml",
     "name": "Modular Synth",
-    "description": "Build sounds from synthesizer modules held in variables: oscillator, filter, envelope, volume, LFO, mix, delay, noise, ring modulator, waveform processor, divider, slew limiter, trigger divider and sequencers",
+    "description": "Build sounds from synthesizer modules held in variables: oscillator, filter, envelope, volume, LFO, mix, delay, noise, ring modulator, waveform processor, divider, slew limiter, trigger divider, trigger sequencer and note sequencer",
     "searchData": [
       "Create _ _",
       "Set Oscillator _ Wave Type: _ Frequency: _ Hz Control: _ Trigger: _ Pulse Width: _ ％",
@@ -2822,7 +2822,7 @@
       "Set Slew Limiter _ Input: _ Rise: _ s Fall: _ s",
       "Set Trigger Divider _ Trigger: _ Divide by: _",
       "Set Trigger Sequencer _ Pattern: _ Tempo: _ steps/min Clock: _",
-      "Set Sequencer _ Notes: _ Tempo: _ steps/min Clock: _",
+      "Set Note Sequencer _ Notes: _ Tempo: _ steps/min Clock: _",
       "Gate _ _",
       "Mix _",
       "Set Speaker Input to _",
